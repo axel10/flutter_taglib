@@ -81,6 +81,52 @@ void main() {
         file.close();
       }
     });
+
+    test('Read APE metadata', () {
+      final file = TagLibFile.open('test/assets/01 TempleOS Hymn Risen (Remix).ape');
+      expect(file, isNotNull);
+      if (file != null) {
+        print('APE Title: "${file.title}"');
+        print('APE Artist: "${file.artist}"');
+        print('APE Album: "${file.album}"');
+        print('APE Duration: ${file.duration}');
+        print('APE SampleRate: ${file.sampleRate} Hz');
+        print('APE Channels: ${file.channels}');
+        expect(file.title, equals('TempleOS Hymn Risen (Remix)'));
+        expect(file.artist, equals('Terry A. Davis'));
+        expect(file.album, equals('TempleOS Hymns'));
+        expect(file.genre, equals('Electronic'));
+        expect(file.year, equals(2020));
+        expect(file.track, equals(1));
+        expect(file.duration.inSeconds, equals(3));
+        expect(file.sampleRate, equals(44100));
+        expect(file.channels, equals(2));
+        file.close();
+      }
+    });
+
+    test('Read AIFF metadata', () {
+      final file = TagLibFile.open('test/assets/01 TempleOS Hymn Risen (Remix).aiff');
+      expect(file, isNotNull);
+      if (file != null) {
+        print('AIFF Title: "${file.title}"');
+        print('AIFF Artist: "${file.artist}"');
+        print('AIFF Album: "${file.album}"');
+        print('AIFF Duration: ${file.duration}');
+        print('AIFF SampleRate: ${file.sampleRate} Hz');
+        print('AIFF Channels: ${file.channels}');
+        expect(file.title, equals('TempleOS Hymn Risen (Remix)'));
+        expect(file.artist, equals('Terry A. Davis'));
+        expect(file.album, equals('TempleOS Hymns'));
+        expect(file.genre, equals('Electronic'));
+        expect(file.year, equals(2020));
+        expect(file.track, equals(1));
+        expect(file.duration.inSeconds, equals(3));
+        expect(file.sampleRate, equals(44100));
+        expect(file.channels, equals(2));
+        file.close();
+      }
+    });
   });
 
   group('TagLib Metadata Modifying', () {
@@ -169,6 +215,66 @@ void main() {
       expect(file3!.hasCover, isFalse);
       expect(file3.coverData, isNull);
       file3.close();
+    });
+
+    test('Write and read back metadata fields for APE', () {
+      final tempApe = File('${tempDir.path}/temp_test.ape');
+      File('test/assets/01 TempleOS Hymn Risen (Remix).ape').copySync(tempApe.path);
+
+      final file = TagLibFile.open(tempApe.path);
+      expect(file, isNotNull);
+      if (file != null) {
+        expect(file.duration.inSeconds, equals(3));
+        expect(file.sampleRate, equals(44100));
+
+        file.title = 'APE Modified Title';
+        file.artist = 'APE Modified Artist';
+        file.album = 'APE Modified Album';
+
+        final saved = file.save();
+        expect(saved, isTrue);
+        file.close();
+
+        // Read back to verify
+        final file2 = TagLibFile.open(tempApe.path);
+        expect(file2, isNotNull);
+        if (file2 != null) {
+          expect(file2.title, equals('APE Modified Title'));
+          expect(file2.artist, equals('APE Modified Artist'));
+          expect(file2.album, equals('APE Modified Album'));
+          file2.close();
+        }
+      }
+    });
+
+    test('Write and read back metadata fields for AIFF', () {
+      final tempAiff = File('${tempDir.path}/temp_test.aiff');
+      File('test/assets/01 TempleOS Hymn Risen (Remix).aiff').copySync(tempAiff.path);
+
+      final file = TagLibFile.open(tempAiff.path);
+      expect(file, isNotNull);
+      if (file != null) {
+        expect(file.duration.inSeconds, equals(3));
+        expect(file.sampleRate, equals(44100));
+
+        file.title = 'AIFF Modified Title';
+        file.artist = 'AIFF Modified Artist';
+        file.album = 'AIFF Modified Album';
+
+        final saved = file.save();
+        expect(saved, isTrue);
+        file.close();
+
+        // Read back to verify
+        final file2 = TagLibFile.open(tempAiff.path);
+        expect(file2, isNotNull);
+        if (file2 != null) {
+          expect(file2.title, equals('AIFF Modified Title'));
+          expect(file2.artist, equals('AIFF Modified Artist'));
+          expect(file2.album, equals('AIFF Modified Album'));
+          file2.close();
+        }
+      }
     });
   });
 }
