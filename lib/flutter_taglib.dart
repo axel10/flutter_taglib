@@ -3,7 +3,10 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart' show MethodChannel;
+import 'package:logging/logging.dart';
 import 'flutter_taglib_bindings_generated.dart' as bindings;
+
+final Logger _logger = Logger('flutter_taglib');
 
 /// High-level API for reading and writing music metadata using TagLib.
 ///
@@ -53,7 +56,7 @@ class TagLibFile {
     try {
       return await _channel.invokeMethod<String>('requestWritePermission', {'uri': uri});
     } catch (e) {
-      print('flutter_taglib: requestWritePermission failed: $e');
+      _logger.warning('requestWritePermission failed: $e');
       return null;
     }
   }
@@ -75,7 +78,7 @@ class TagLibFile {
     try {
       final handle = bindings.taglib_bridge_open(pathPtr.cast<ffi.Char>());
       if (handle == ffi.nullptr) {
-        print('flutter_taglib: Failed to open path "$path". Check native/platform logs for details.');
+        _logger.severe('Failed to open path "$path". Check native/platform logs for details.');
         return null;
       }
       return TagLibFile._(handle, path);
@@ -96,7 +99,7 @@ class TagLibFile {
     if (writeAccess && Platform.isAndroid) {
       final grantedUri = await requestWritePermission(path);
       if (grantedUri == null) {
-        print('flutter_taglib: Write permission denied for $path');
+        _logger.warning('Write permission denied for $path');
         return null;
       }
       targetPath = grantedUri;
@@ -106,7 +109,7 @@ class TagLibFile {
     try {
       final handle = bindings.taglib_bridge_open(pathPtr.cast<ffi.Char>());
       if (handle == ffi.nullptr) {
-        print('flutter_taglib: Failed to open path "$targetPath". Check native/platform logs for details.');
+        _logger.severe('Failed to open path "$targetPath". Check native/platform logs for details.');
         return null;
       }
       return TagLibFile._(handle, targetPath);
@@ -128,7 +131,7 @@ class TagLibFile {
     }
     final handle = bindings.taglib_bridge_open_fd(fd);
     if (handle == ffi.nullptr) {
-      print('flutter_taglib: Failed to open FD $fd. Check native/platform logs for details.');
+      _logger.severe('Failed to open FD $fd. Check native/platform logs for details.');
       return null;
     }
     return TagLibFile._(handle, path);
@@ -155,7 +158,7 @@ class TagLibFile {
     try {
       final newHandle = bindings.taglib_bridge_open(pathPtr.cast<ffi.Char>());
       if (newHandle == ffi.nullptr) {
-        print('flutter_taglib: Failed to reopen path "$grantedUri" in write mode.');
+        _logger.severe('Failed to reopen path "$grantedUri" in write mode.');
         return false;
       }
       _handle = newHandle;
@@ -172,7 +175,7 @@ class TagLibFile {
     _checkClosed();
     final success = bindings.taglib_bridge_save(_handle) == 1;
     if (!success) {
-      print('flutter_taglib: Failed to save metadata changes. Check native/platform logs for details.');
+      _logger.severe('Failed to save metadata changes. Check native/platform logs for details.');
     }
     return success;
   }

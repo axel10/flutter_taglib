@@ -1,7 +1,7 @@
 # flutter_taglib
 
 [![pub package](https://img.shields.io/pub/v/flutter_taglib.svg)](https://pub.dev/packages/flutter_taglib)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 A high-performance, feature-rich Flutter plugin wrapping **TagLib** using Dart FFI and Native Assets. It allows you to read and write audio metadata (including album cover art) and extract technical audio properties across various platforms.
 
@@ -236,4 +236,4 @@ Because this plugin compiles TagLib from source using Native Assets:
 
 ## License
 
-This project is licensed under the MIT License. TagLib itself is licensed under LGPL/MPL.
+This project is licensed under the Apache 2.0 License. TagLib itself is licensed under LGPL/MPL.

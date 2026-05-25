@@ -1,5 +1,5 @@
 name: flutter_taglib
-description: "A new Dart FFI package project."
+description: "A high-performance Flutter plugin wrapping TagLib using Dart FFI and Native Assets to read/write audio metadata and properties."
 version: 0.0.1
 
 environment:
@@ -25,4 +25,12 @@ flutter:
       android:
         package: com.axel10.flutter_taglib
         pluginClass: FlutterTaglibPlugin
+      ios:
+        ffiPlugin: true
+      macos:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true
+      linux:
+        ffiPlugin: true
 

@@ -146,7 +146,6 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.audio,
-        allowMultiple: false,
       );
 
       if (result != null) {
@@ -171,7 +170,6 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.image,
-        allowMultiple: false,
       );
 
       if (result != null && result.files.single.path != null) {
