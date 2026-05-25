@@ -4,18 +4,165 @@
 // ignore_for_file: type=lint, unused_import
 import 'dart:ffi' as ffi;
 
-/// A very short-lived native function.
-///
-/// For very short-lived functions, it is fine to call them on the main isolate.
-/// They will block the Dart execution while running the native function, so
-/// only do this for native functions which are guaranteed to be short-lived.
-@ffi.Native<ffi.IntPtr Function(ffi.IntPtr, ffi.IntPtr)>()
-external int sum(int a, int b);
+/// Open a file by file path. Returns NULL if failed.
+@ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Pointer<ffi.Char>)>()
+external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open(
+  ffi.Pointer<ffi.Char> filepath,
+);
 
-/// A longer lived native function, which occupies the thread calling it.
-///
-/// Do not call these kind of native functions in the main isolate. They will
-/// block Dart execution. This will cause dropped frames in Flutter applications.
-/// Instead, call these native functions on a separate isolate.
-@ffi.Native<ffi.IntPtr Function(ffi.IntPtr, ffi.IntPtr)>()
-external int sum_long_running(int a, int b);
+/// Open a file by File Descriptor (FD). Returns NULL if failed.
+@ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Int)>()
+external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd(int fd);
+
+/// Save changes to the file. Returns 1 on success, 0 on failure.
+@ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_save(ffi.Pointer<TagLibBridgeFile> file);
+
+/// Close and free resources.
+@ffi.Native<ffi.Void Function(ffi.Pointer<TagLibBridgeFile>)>()
+external void taglib_bridge_close(ffi.Pointer<TagLibBridgeFile> file);
+
+/// Read string properties. The returned strings are managed by the bridge and must NOT be freed.
+@ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<TagLibBridgeFile>)>()
+external ffi.Pointer<ffi.Char> taglib_bridge_get_title(
+  ffi.Pointer<TagLibBridgeFile> file,
+);
+
+@ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<TagLibBridgeFile>)>()
+external ffi.Pointer<ffi.Char> taglib_bridge_get_artist(
+  ffi.Pointer<TagLibBridgeFile> file,
+);
+
+@ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<TagLibBridgeFile>)>()
+external ffi.Pointer<ffi.Char> taglib_bridge_get_album(
+  ffi.Pointer<TagLibBridgeFile> file,
+);
+
+@ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<TagLibBridgeFile>)>()
+external ffi.Pointer<ffi.Char> taglib_bridge_get_genre(
+  ffi.Pointer<TagLibBridgeFile> file,
+);
+
+@ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<TagLibBridgeFile>)>()
+external ffi.Pointer<ffi.Char> taglib_bridge_get_comment(
+  ffi.Pointer<TagLibBridgeFile> file,
+);
+
+/// Read integer properties
+@ffi.Native<ffi.Uint32 Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_year(ffi.Pointer<TagLibBridgeFile> file);
+
+@ffi.Native<ffi.Uint32 Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_track(ffi.Pointer<TagLibBridgeFile> file);
+
+/// Write string properties
+@ffi.Native<
+  ffi.Void Function(ffi.Pointer<TagLibBridgeFile>, ffi.Pointer<ffi.Char>)
+>()
+external void taglib_bridge_set_title(
+  ffi.Pointer<TagLibBridgeFile> file,
+  ffi.Pointer<ffi.Char> title,
+);
+
+@ffi.Native<
+  ffi.Void Function(ffi.Pointer<TagLibBridgeFile>, ffi.Pointer<ffi.Char>)
+>()
+external void taglib_bridge_set_artist(
+  ffi.Pointer<TagLibBridgeFile> file,
+  ffi.Pointer<ffi.Char> artist,
+);
+
+@ffi.Native<
+  ffi.Void Function(ffi.Pointer<TagLibBridgeFile>, ffi.Pointer<ffi.Char>)
+>()
+external void taglib_bridge_set_album(
+  ffi.Pointer<TagLibBridgeFile> file,
+  ffi.Pointer<ffi.Char> album,
+);
+
+@ffi.Native<
+  ffi.Void Function(ffi.Pointer<TagLibBridgeFile>, ffi.Pointer<ffi.Char>)
+>()
+external void taglib_bridge_set_genre(
+  ffi.Pointer<TagLibBridgeFile> file,
+  ffi.Pointer<ffi.Char> genre,
+);
+
+@ffi.Native<
+  ffi.Void Function(ffi.Pointer<TagLibBridgeFile>, ffi.Pointer<ffi.Char>)
+>()
+external void taglib_bridge_set_comment(
+  ffi.Pointer<TagLibBridgeFile> file,
+  ffi.Pointer<ffi.Char> comment,
+);
+
+/// Write integer properties
+@ffi.Native<ffi.Void Function(ffi.Pointer<TagLibBridgeFile>, ffi.Uint32)>()
+external void taglib_bridge_set_year(
+  ffi.Pointer<TagLibBridgeFile> file,
+  int year,
+);
+
+@ffi.Native<ffi.Void Function(ffi.Pointer<TagLibBridgeFile>, ffi.Uint32)>()
+external void taglib_bridge_set_track(
+  ffi.Pointer<TagLibBridgeFile> file,
+  int track,
+);
+
+/// Read audio properties
+@ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_duration(ffi.Pointer<TagLibBridgeFile> file);
+
+@ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_bitrate(ffi.Pointer<TagLibBridgeFile> file);
+
+@ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_samplerate(ffi.Pointer<TagLibBridgeFile> file);
+
+@ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_channels(ffi.Pointer<TagLibBridgeFile> file);
+
+/// Album Art / Picture APIs
+@ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_has_cover(ffi.Pointer<TagLibBridgeFile> file);
+
+@ffi.Native<ffi.Uint32 Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_cover_data_size(
+  ffi.Pointer<TagLibBridgeFile> file,
+);
+
+@ffi.Native<
+  ffi.Int Function(
+    ffi.Pointer<TagLibBridgeFile>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Uint32,
+  )
+>()
+external int taglib_bridge_get_cover_data(
+  ffi.Pointer<TagLibBridgeFile> file,
+  ffi.Pointer<ffi.Uint8> buffer,
+  int buffer_size,
+);
+
+@ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<TagLibBridgeFile>)>()
+external ffi.Pointer<ffi.Char> taglib_bridge_get_cover_mime_type(
+  ffi.Pointer<TagLibBridgeFile> file,
+);
+
+/// Write album art. mime_type can be "image/jpeg" or "image/png". Pass data=NULL, size=0 to remove cover.
+@ffi.Native<
+  ffi.Int Function(
+    ffi.Pointer<TagLibBridgeFile>,
+    ffi.Pointer<ffi.Char>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Uint32,
+  )
+>()
+external int taglib_bridge_set_cover(
+  ffi.Pointer<TagLibBridgeFile> file,
+  ffi.Pointer<ffi.Char> mime_type,
+  ffi.Pointer<ffi.Uint8> data,
+  int size,
+);
+
+final class TagLibBridgeFile extends ffi.Opaque {}
