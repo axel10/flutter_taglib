@@ -217,6 +217,35 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
     });
 
     try {
+      var targetPath = _filePath!;
+
+      // Request write permission on Android for content URIs / storage paths
+      if (Platform.isAndroid && _filePath != null) {
+        final grantedUri = await TagLibFile.requestWritePermission(_filePath!);
+        if (grantedUri == null) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to save: Write permission denied.'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+          setState(() {
+            _isSaving = false;
+          });
+          return;
+        }
+        targetPath = grantedUri;
+      }
+
+      // Close the existing read-only file and reopen in write mode
+      _tagLibFile?.close();
+      final writableFile = TagLibFile.open(targetPath);
+      if (writableFile == null) {
+        throw Exception('Failed to reopen file in write mode.');
+      }
+      _tagLibFile = writableFile;
+
       // Set updated tag fields
       _tagLibFile!.title = titleController.text;
       _tagLibFile!.artist = artistController.text;

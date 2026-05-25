@@ -1,6 +1,8 @@
 import 'dart:ffi' as ffi;
+import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'flutter_taglib_bindings_generated.dart' as bindings;
 
 /// High-level API for reading and writing music metadata using TagLib.
@@ -21,6 +23,24 @@ import 'flutter_taglib_bindings_generated.dart' as bindings;
 /// }
 /// ```
 class TagLibFile {
+  static const MethodChannel _channel = MethodChannel('flutter_taglib');
+
+  /// Requests write permission for the given URI on Android.
+  ///
+  /// For Scoped Storage (Android 10+), modifying files from public directories
+  /// requires user approval. This method triggers the Android system permission request dialog
+  /// and returns the URI that has write permission granted, or `null` if permission was denied.
+  /// On other platforms, it immediately returns the original URI.
+  static Future<String?> requestWritePermission(String uri) async {
+    if (!Platform.isAndroid) return uri;
+    try {
+      return await _channel.invokeMethod<String>('requestWritePermission', {'uri': uri});
+    } catch (e) {
+      print('flutter_taglib: requestWritePermission failed: $e');
+      return null;
+    }
+  }
+
   final ffi.Pointer<bindings.TagLibBridgeFile> _handle;
   bool _isClosed = false;
 
