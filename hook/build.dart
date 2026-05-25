@@ -48,6 +48,11 @@ void main(List<String> args) async {
       std: 'c++17',
       language: Language.cpp,
       cppLinkStdLib: input.config.code.targetOS.toString().contains('android') ? 'c++_static' : null,
+      libraries: [
+        if (input.config.code.targetOS.toString().contains('android') ||
+            input.config.code.targetOS.toString().contains('linux'))
+          'm',
+      ],
     );
 
     await cbuilder.run(
