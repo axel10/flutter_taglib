@@ -1,3 +1,6 @@
+## 1.0.3
+* Support SPM
+
 ## 1.0.2
 * Upgrade dependencies
 
