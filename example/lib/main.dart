@@ -71,6 +71,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   String? _filePath;
   String? _fileName;
   String? _fileDirectoryPath;
+  String? _originalFilePath;
   TagLibFile? _tagLibFile;
   String? _errorMessage;
   bool _isSaving = false;
@@ -133,7 +134,11 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   }
 
   /// Opens the file using TagLibFile and updates the state controllers
-  Future<void> _loadFile(String path, {String? name}) async {
+  Future<void> _loadFile(
+    String path, {
+    String? name,
+    String? originalPath,
+  }) async {
     _tagLibFile?.close();
     debugPrint('TagLib _loadFile start path=$path name=$name');
 
@@ -157,6 +162,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         _filePath = null;
         _fileName = null;
         _fileDirectoryPath = null;
+        _originalFilePath = null;
         _tagLibFile = null;
         _errorMessage =
             'Failed to open file. The audio format may not be supported by TagLib.';
@@ -168,9 +174,22 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
     }
     final openedFile = file;
 
-    final directoryPath = Platform.isIOS && !path.startsWith('content://')
-        ? File(path).parent.path
+    final sourcePath = originalPath ?? path;
+    final directoryPath = Platform.isIOS && !sourcePath.startsWith('content://')
+        ? File(sourcePath).parent.path
         : null;
+    String? restoredAuthorizedPath;
+
+    if (Platform.isIOS && directoryPath != null) {
+      try {
+        final restoreResult = await TagLibFile.restoreDirectoryAccess(
+          directoryPath,
+        );
+        restoredAuthorizedPath = restoreResult?['path'] as String?;
+      } catch (e) {
+        debugPrint('Failed to restore directory access for $directoryPath: $e');
+      }
+    }
 
     if (_authorizedDirectoryPath != null &&
         directoryPath != null &&
@@ -180,6 +199,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
 
     setState(() {
       _filePath = path;
+      _originalFilePath = originalPath;
       _fileName =
           name ??
           (path.startsWith('content://')
@@ -192,9 +212,10 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       _customCoverBytes = openedFile.coverData;
       _customCoverMimeType = openedFile.coverMimeType;
       _hasDirectoryWriteAccess =
-          _authorizedDirectoryPath != null ||
+          restoredAuthorizedPath != null ||
           !Platform.isIOS ||
           directoryPath == null;
+      _authorizedDirectoryPath = restoredAuthorizedPath;
       _isCheckingDirectoryAccess = Platform.isIOS && directoryPath != null;
 
       titleController.text = openedFile.title;
@@ -227,7 +248,11 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         final result = await TagLibFile.pickAudioFile();
         final path = result?['path'];
         if (path != null && path.isNotEmpty) {
-          await _loadFile(path, name: result?['name']);
+          await _loadFile(
+            path,
+            name: result?['name'],
+            originalPath: result?['originalPath'],
+          );
         }
         return;
       }
@@ -469,6 +494,15 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       if (!mounted) return;
 
       if (success) {
+        if (Platform.isIOS &&
+            _originalFilePath != null &&
+            _originalFilePath != _tagLibFile!.path) {
+          await TagLibFile.commitPickedFile(
+            workingPath: _tagLibFile!.path,
+            originalPath: _originalFilePath!,
+          );
+          if (!mounted) return;
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Metadata saved successfully!'),
@@ -476,7 +510,11 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
           ),
         );
         // Reload metadata to confirm it writes/reads correctly
-        await _loadFile(_tagLibFile!.path, name: _fileName);
+        await _loadFile(
+          _tagLibFile!.path,
+          name: _fileName,
+          originalPath: _originalFilePath,
+        );
       } else {
         if (Platform.isIOS && !_hasDirectoryWriteAccess) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -716,7 +754,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  _filePath ?? '',
+                  _originalFilePath ?? _filePath ?? '',
                   style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
                   overflow: TextOverflow.fade,
                 ),

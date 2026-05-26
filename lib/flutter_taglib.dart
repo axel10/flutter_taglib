@@ -522,6 +522,18 @@ class TagLibFile {
     return result;
   }
 
+  /// (iOS only) Commits a local working copy back to the original picked file.
+  static Future<void> commitPickedFile({
+    required String workingPath,
+    required String originalPath,
+  }) async {
+    if (!Platform.isIOS) return;
+    await _channel.invokeMethod<void>('commitPickedFile', {
+      'workingPath': workingPath,
+      'originalPath': originalPath,
+    });
+  }
+
   /// (iOS only) Let the user pick a folder and returns a map with:
   /// - `path`: The absolute path of the chosen directory.
   ///
@@ -554,6 +566,19 @@ class TagLibFile {
     }
     final result = await _channel.invokeMapMethod<String, dynamic>(
       'startAccessingDirectory',
+      {'path': path},
+    );
+    return result;
+  }
+
+  /// (iOS only) Restores a previously authorized directory bookmark for [path]
+  /// or one of its ancestor directories.
+  static Future<Map<String, dynamic>?> restoreDirectoryAccess(
+    String path,
+  ) async {
+    if (!Platform.isIOS) return null;
+    final result = await _channel.invokeMapMethod<String, dynamic>(
+      'restoreDirectoryAccess',
       {'path': path},
     );
     return result;
