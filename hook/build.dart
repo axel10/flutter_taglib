@@ -17,6 +17,7 @@ void main(List<String> args) async {
     }
 
     final packageName = input.packageName;
+    final nativeLibraryName = '${packageName}_native';
 
     // --- Online Fetch TagLib 2.3 & utfcpp ---
     final taglibVersion = '2.3';
@@ -168,7 +169,10 @@ void main(List<String> args) async {
     }
 
     final cbuilder = CBuilder.library(
-      name: packageName,
+      // Avoid colliding with the CocoaPods plugin framework name on iOS/macOS.
+      // The asset id still points at the generated Dart bindings, but the
+      // produced dynamic library/framework gets its own distinct basename.
+      name: nativeLibraryName,
       assetName: '${packageName}_bindings_generated.dart',
       sources: sources,
       includes: includes,

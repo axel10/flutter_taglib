@@ -11,6 +11,7 @@ headers:
   include-directives:
     - 'src/flutter_taglib.h'
 ffi-native:
+  asset-id: 'package:flutter_taglib/flutter_taglib_bindings_generated.dart'
 comments:
   style: any
   length: full
