@@ -33,3 +33,6 @@ migrate_working_dir/
 # Cache for dynamic taglib downloads
 /.dart_tool/flutter_taglib/
 
+# Ignore local taglib source directory
+/taglib/
+

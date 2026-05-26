@@ -8,4 +8,4 @@ example/ios/Pods/
 example/macos/Pods/
 example/linux/flutter/ephemeral/
 example/windows/flutter/ephemeral/
-taglib/
+taglib
