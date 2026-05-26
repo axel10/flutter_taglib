@@ -1,0 +1,13 @@
+*.log
+example/build/
+example/.dart_tool/
+example/.idea/
+example/android/.gradle/
+example/android/build/
+example/ios/Pods/
+example/macos/Pods/
+example/linux/flutter/ephemeral/
+example/windows/flutter/ephemeral/
+example/build.log
+example/ios-build.log
+taglib/

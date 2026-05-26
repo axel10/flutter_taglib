@@ -37,8 +37,16 @@ Add `flutter_taglib` to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
+  flutter_taglib: ^1.0.0
+```
+
+If you are developing against the local repository, you can keep using a path
+dependency during development:
+
+```yaml
+dependencies:
   flutter_taglib:
-    path: /path/to/flutter_taglib # Use path dependency or pub version when published
+    path: /path/to/flutter_taglib
 ```
 
 ---
