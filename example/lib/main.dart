@@ -222,10 +222,12 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       artistController.text = openedFile.artist;
       albumController.text = openedFile.album;
       genreController.text = openedFile.genre;
-      yearController.text =
-          openedFile.year == 0 ? '' : openedFile.year.toString();
-      trackController.text =
-          openedFile.track == 0 ? '' : openedFile.track.toString();
+      yearController.text = openedFile.year == 0
+          ? ''
+          : openedFile.year.toString();
+      trackController.text = openedFile.track == 0
+          ? ''
+          : openedFile.track.toString();
     });
 
     if (directoryPath != null) {
@@ -631,9 +633,14 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Center(
-                                      child: SizedBox(
-                                        width: 300,
-                                        child: _buildCoverArtSection(),
+                                      child: ConstrainedBox(
+                                        constraints: const BoxConstraints(
+                                          maxWidth: 300,
+                                        ),
+                                        child: SizedBox(
+                                          width: double.infinity,
+                                          child: _buildCoverArtSection(),
+                                        ),
                                       ),
                                     ),
                                     const SizedBox(height: 32),
@@ -736,38 +743,67 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFF334155)),
       ),
-      child: Row(
-        children: [
-          Icon(Icons.audio_file, color: Colors.indigo.shade300, size: 28),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  fileName,
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final isNarrow = constraints.maxWidth < 520;
+
+          final fileDetails = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                fileName,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  _originalFilePath ?? _filePath ?? '',
-                  style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-                  overflow: TextOverflow.fade,
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 12),
-          TextButton.icon(
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _originalFilePath ?? _filePath ?? '',
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
+                overflow: TextOverflow.fade,
+              ),
+            ],
+          );
+
+          final actionButton = TextButton.icon(
             onPressed: _pickAudioFile,
             icon: const Icon(Icons.swap_horiz, size: 18),
             label: const Text('Change File'),
-          ),
-        ],
+          );
+
+          if (isNarrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.audio_file,
+                      color: Colors.indigo.shade300,
+                      size: 28,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(child: fileDetails),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Align(alignment: Alignment.centerLeft, child: actionButton),
+              ],
+            );
+          }
+
+          return Row(
+            children: [
+              Icon(Icons.audio_file, color: Colors.indigo.shade300, size: 28),
+              const SizedBox(width: 16),
+              Expanded(child: fileDetails),
+              const SizedBox(width: 12),
+              actionButton,
+            ],
+          );
+        },
       ),
     );
   }
@@ -931,8 +967,10 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
               ),
               const SizedBox(height: 12),
             ],
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            Wrap(
+              alignment: WrapAlignment.center,
+              spacing: 12,
+              runSpacing: 12,
               children: [
                 ElevatedButton.icon(
                   onPressed: _pickCoverImage,
