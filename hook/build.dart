@@ -222,7 +222,12 @@ Future<void> _downloadFile(String url, File targetFile) async {
 }
 
 Future<void> _extractZip(File zipFile, Directory destDir) async {
-  final result = await Process.run('tar', ['-xf', zipFile.path, '-C', destDir.path]);
+  ProcessResult result;
+  if (Platform.isWindows) {
+    result = await Process.run('tar', ['-xf', zipFile.path, '-C', destDir.path]);
+  } else {
+    result = await Process.run('unzip', ['-o', '-q', zipFile.path, '-d', destDir.path]);
+  }
   if (result.exitCode != 0) {
     throw Exception('Failed to extract ${zipFile.path}: ${result.stderr}');
   }
