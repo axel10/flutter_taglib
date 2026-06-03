@@ -257,6 +257,8 @@ bool _isPlatformEnabled(String targetOS) {
     Directory.current.uri.resolve('flutter_taglib.yaml').toFilePath(),
     if (Directory.current.parent.existsSync())
       Directory.current.parent.uri.resolve('flutter_taglib.yaml').toFilePath(),
+    if (Directory.current.parent.existsSync() && Directory.current.parent.parent.existsSync())
+      Directory.current.parent.parent.uri.resolve('flutter_taglib.yaml').toFilePath(),
   ];
 
   for (final path in pathsToCheck) {
