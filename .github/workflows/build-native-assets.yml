@@ -73,9 +73,21 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      - name: Enable desktop source build marker
+        shell: bash
+        run: |
+          touch .flutter_taglib_build_desktop_from_source
+
       - name: Build desktop example
         working-directory: example
         run: ${{ matrix.flutter-build-command }}
+
+      - name: Debug native asset outputs
+        shell: bash
+        run: |
+          echo "Searching for native asset outputs..."
+          find . -path '*native_assets*' | sort || true
+          find . -name '*taglib*.so' -o -name '*taglib*.dll' | sort || true
 
       - name: Collect Windows asset
         if: runner.os == 'Windows'

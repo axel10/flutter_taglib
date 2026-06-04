@@ -22,9 +22,7 @@ void main(List<String> args) async {
       return;
     }
 
-    final buildDesktopFromSource =
-        Platform.environment['FLUTTER_TAGLIB_BUILD_DESKTOP_FROM_SOURCE'] ==
-        'true';
+    final buildDesktopFromSource = _shouldBuildDesktopFromSource();
     if ((targetOSStr == 'windows' || targetOSStr == 'linux') &&
         !buildDesktopFromSource) {
       print(
@@ -229,6 +227,31 @@ void main(List<String> args) async {
         ..onRecord.listen((record) => print(record.message)),
     );
   });
+}
+
+bool _shouldBuildDesktopFromSource() {
+  if (Platform.environment['FLUTTER_TAGLIB_BUILD_DESKTOP_FROM_SOURCE'] ==
+      'true') {
+    return true;
+  }
+
+  const markerName = '.flutter_taglib_build_desktop_from_source';
+  final markerPaths = [
+    Directory.current.uri.resolve(markerName).toFilePath(),
+    if (Directory.current.parent.existsSync())
+      Directory.current.parent.uri.resolve(markerName).toFilePath(),
+    if (Directory.current.parent.existsSync() &&
+        Directory.current.parent.parent.existsSync())
+      Directory.current.parent.parent.uri.resolve(markerName).toFilePath(),
+  ];
+
+  for (final path in markerPaths) {
+    if (File(path).existsSync()) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 Future<void> _downloadFile(String url, File targetFile) async {
