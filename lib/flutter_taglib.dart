@@ -6,6 +6,7 @@ import 'dart:io' show Platform;
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/services.dart' show MethodChannel;
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:logging/logging.dart';
 import 'src/flutter_taglib_bindings.dart' as bindings;
 
@@ -45,6 +46,9 @@ class Picture {
 /// ```
 class TagLibFile {
   static const MethodChannel _channel = MethodChannel('flutter_taglib');
+
+  /// Tracks the most recent failure message during opening, writing permission, or saving.
+  static String? lastError;
 
   static bool? _isSupportedCached;
   static Object? _lastSupportProbeError;
@@ -150,16 +154,24 @@ class TagLibFile {
   static Future<String?> requestWritePermission(String uri) async {
     if (!Platform.isAndroid) return uri;
     if (!isSupported) {
+      lastError = 'flutter_taglib is not supported or has been disabled on this platform.';
       throw UnsupportedError(
         'flutter_taglib is not supported or has been disabled on this platform.',
       );
     }
     try {
-      return await _channel.invokeMethod<String>('requestWritePermission', {
+      final result = await _channel.invokeMethod<String>('requestWritePermission', {
         'uri': uri,
       });
+      if (result == null) {
+        lastError = 'requestWritePermission returned null (permission denied or directory not write-authorized) for $uri';
+        debugPrint('[flutter_taglib] $lastError');
+      }
+      return result;
     } catch (e) {
       _logger.warning('requestWritePermission failed: $e');
+      lastError = 'requestWritePermission failed: $e';
+      debugPrint('[flutter_taglib] $lastError');
       return null;
     }
   }
@@ -204,10 +216,12 @@ class TagLibFile {
     String path, {
     bool writeAccess = false,
   }) async {
+    lastError = null;
     if (Platform.isWindows || Platform.isLinux) {
       await prepareDesktopLibrary();
     }
     if (!isSupported) {
+      lastError = 'flutter_taglib is not supported or has been disabled on this platform.';
       throw UnsupportedError(
         'flutter_taglib is not supported or has been disabled on this platform.',
       );
@@ -217,6 +231,8 @@ class TagLibFile {
       final grantedUri = await requestWritePermission(path);
       if (grantedUri == null) {
         _logger.warning('Write permission denied for $path');
+        lastError ??= 'Write permission denied for $path';
+        debugPrint('[flutter_taglib] $lastError');
         return null;
       }
       targetPath = grantedUri;
@@ -231,6 +247,8 @@ class TagLibFile {
         _logger.warning(
           'Failed to open Android file descriptor for $targetPath',
         );
+        lastError ??= 'Failed to open Android file descriptor for $targetPath';
+        debugPrint('[flutter_taglib] $lastError');
         return null;
       }
       return TagLibFile.openFd(fd, path: targetPath);
@@ -243,6 +261,8 @@ class TagLibFile {
         _logger.severe(
           'Failed to open path "$targetPath". Check native/platform logs for details.',
         );
+        lastError = 'Failed to open path via TagLib bridge for "$targetPath". File might be corrupted or not exist.';
+        debugPrint('[flutter_taglib] $lastError');
         return null;
       }
       return TagLibFile._(handle, targetPath);
@@ -316,6 +336,8 @@ class TagLibFile {
       _logger.severe(
         'Failed to save metadata changes. Check native/platform logs for details.',
       );
+      lastError = 'Failed to save metadata changes via native TagLib taglib_bridge_save.';
+      debugPrint('[flutter_taglib] $lastError');
     }
     return success;
   }
@@ -696,6 +718,8 @@ class TagLibFile {
       });
     } catch (e) {
       _logger.warning('openFileDescriptor failed: $e');
+      lastError = 'openFileDescriptor failed for $uri with mode $mode: $e';
+      debugPrint('[flutter_taglib] $lastError');
       return null;
     }
   }

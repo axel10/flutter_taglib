@@ -282,14 +282,14 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
                 TAG,
                 "handleOpenFileDescriptor: openFileDescriptor returned null for $uriStr",
             )
-            result.success(null)
+            result.error("OPEN_FAILED", "openFileDescriptor returned null for $uriStr", null)
         } catch (e: Exception) {
             Log.e(
                 TAG,
                 "handleOpenFileDescriptor: failed to open fd for $uriStr: ${e.message}",
                 e,
             )
-            result.success(null)
+            result.error("OPEN_FAILED", "failed to open fd for $uriStr: ${e.message}", e.toString())
         }
     }
 
