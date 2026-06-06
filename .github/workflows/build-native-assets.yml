@@ -21,9 +21,10 @@ on:
       - main
     tags:
       - desktop-binaries-v*
+      - android-binaries-v*
 
 run-name: >-
-  Build desktop native assets
+  Build native assets
   ${{
     github.event_name == 'workflow_dispatch'
       && format('(version {0})', inputs.version)
@@ -143,10 +144,60 @@ jobs:
           name: ${{ matrix.platform }}${{ github.event_name == 'workflow_dispatch' && format('-v{0}', inputs.version) || '' }}
           path: dist/${{ matrix.output-name }}
 
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Build Android APK
+        working-directory: example
+        run: flutter build apk --release
+
+      - name: Debug Android outputs
+        shell: bash
+        run: |
+          echo "Searching for Android native asset outputs..."
+          find . -name 'libflutter_taglib_native.so' | sort || true
+
+      - name: Collect Android assets
+        shell: bash
+        run: |
+          mkdir -p dist
+          find example/build/ -path '*/merged_native_libs/release/out/lib/*' -name 'libflutter_taglib_native.so' | while read -r file; do
+            abi=$(basename "$(dirname "$file")")
+            cp "$file" "dist/libflutter_taglib_android_${abi}.so"
+            echo "Collected $abi binary: dist/libflutter_taglib_android_${abi}.so"
+          done
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-binaries${{ github.event_name == 'workflow_dispatch' && format('-v{0}', inputs.version) || '' }}
+          path: dist/libflutter_taglib_android_*.so
+
   publish-release:
     name: Publish Release Assets
-    needs: build-desktop
-    if: startsWith(github.ref, 'refs/tags/desktop-binaries-v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+    needs: [build-desktop, build-android]
+    if: >-
+      startsWith(github.ref, 'refs/tags/desktop-binaries-v') ||
+      startsWith(github.ref, 'refs/tags/android-binaries-v') ||
+      (github.event_name == 'workflow_dispatch' && inputs.publish_release)
     runs-on: ubuntu-22.04
 
     steps:
@@ -176,3 +227,6 @@ jobs:
           files: |
             dist/windows-x64${{ github.event_name == 'workflow_dispatch' && format('-v{0}', inputs.version) || '' }}/flutter_taglib_windows_x64.dll
             dist/linux-x64${{ github.event_name == 'workflow_dispatch' && format('-v{0}', inputs.version) || '' }}/libflutter_taglib_linux_x64.so
+            dist/android-binaries${{ github.event_name == 'workflow_dispatch' && format('-v{0}', inputs.version) || '' }}/libflutter_taglib_android_arm64-v8a.so
+            dist/android-binaries${{ github.event_name == 'workflow_dispatch' && format('-v{0}', inputs.version) || '' }}/libflutter_taglib_android_armeabi-v7a.so
+            dist/android-binaries${{ github.event_name == 'workflow_dispatch' && format('-v{0}', inputs.version) || '' }}/libflutter_taglib_android_x86_64.so
