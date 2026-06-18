@@ -30,7 +30,7 @@
 #include <android/log.h>
 
 #define LOG_TAG "FlutterTaglib"
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGI(...) do {} while(0) // Disable info logs to optimize performance
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
@@ -172,7 +172,7 @@ static int open_content_uri_fd(const char* uri_str, const char* mode_str) {
     return fd;
 }
 #else
-#define LOGI(...) do { printf("[FlutterTaglib INFO] "); printf(__VA_ARGS__); printf("\n"); } while(0)
+#define LOGI(...) do {} while(0) // Disable info logs on desktop to optimize performance
 #define LOGW(...) do { fprintf(stderr, "[FlutterTaglib WARN] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 #define LOGE(...) do { fprintf(stderr, "[FlutterTaglib ERROR] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 #endif

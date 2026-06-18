@@ -1,3 +1,6 @@
+## 1.3.2
+* Remove redundant logs
+
 ## 1.3.1
 * Update readme
 
