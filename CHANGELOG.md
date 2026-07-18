@@ -1,3 +1,8 @@
+## 1.4.0
+* Song duration accurate to milliseconds.
+* Deprecated unsupported interfaces.
+* Android uses online pre-built artifacts
+
 ## 1.3.3
 * Lower the Dart SDK requirements to 3.11.0
 

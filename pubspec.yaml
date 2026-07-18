@@ -1,6 +1,6 @@
 name: flutter_taglib
 description: "A high-performance Flutter plugin wrapping TagLib using Dart FFI and Native Assets to read/write audio metadata and properties."
-version: 1.3.3
+version: 1.4.0
 homepage: https://github.com/axel10/flutter_taglib
 repository: https://github.com/axel10/flutter_taglib
 issue_tracker: https://github.com/axel10/flutter_taglib/issues
