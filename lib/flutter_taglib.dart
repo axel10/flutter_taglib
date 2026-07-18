@@ -472,8 +472,8 @@ class TagLibFile {
   /// Duration of the audio file.
   Duration get duration {
     _checkClosed();
-    final seconds = bindings.taglib_bridge_get_duration(_handle);
-    return Duration(seconds: seconds);
+    final milliseconds = bindings.taglib_bridge_get_duration(_handle);
+    return Duration(milliseconds: milliseconds);
   }
 
   /// Bitrate in kbps.

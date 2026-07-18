@@ -51,7 +51,7 @@ FFI_PLUGIN_EXPORT void taglib_bridge_set_year(TagLibBridgeFile* file, uint32_t y
 FFI_PLUGIN_EXPORT void taglib_bridge_set_track(TagLibBridgeFile* file, uint32_t track);
 
 // Read audio properties
-FFI_PLUGIN_EXPORT int taglib_bridge_get_duration(TagLibBridgeFile* file); // seconds
+FFI_PLUGIN_EXPORT int taglib_bridge_get_duration(TagLibBridgeFile* file); // milliseconds
 FFI_PLUGIN_EXPORT int taglib_bridge_get_bitrate(TagLibBridgeFile* file);  // kbps
 FFI_PLUGIN_EXPORT int taglib_bridge_get_samplerate(TagLibBridgeFile* file); // Hz
 FFI_PLUGIN_EXPORT int taglib_bridge_get_channels(TagLibBridgeFile* file);

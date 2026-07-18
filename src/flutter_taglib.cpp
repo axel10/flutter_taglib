@@ -550,7 +550,7 @@ void taglib_bridge_set_track(TagLibBridgeFile* file, uint32_t track) {
 int taglib_bridge_get_duration(TagLibBridgeFile* file) {
     if (!file || !file->fileRef || file->fileRef->isNull() || !file->fileRef->audioProperties()) return 0;
     try {
-        return file->fileRef->audioProperties()->lengthInSeconds();
+        return file->fileRef->audioProperties()->lengthInMilliseconds();
     } catch (...) {
         return 0;
     }
