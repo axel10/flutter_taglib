@@ -6,6 +6,10 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 import 'package:logging/logging.dart';
 import 'package:hooks/hooks.dart';
 
+const String _prebuiltReleaseTag = 'desktop-binaries-v1.4.0';
+const String _githubDownloadBaseUrl =
+    'https://github.com/axel10/flutter_taglib/releases/download/$_prebuiltReleaseTag';
+
 void main(List<String> args) async {
   await build(args, (input, output) async {
     if (!input.config.buildCodeAssets) {
@@ -51,7 +55,7 @@ void main(List<String> args) async {
           cacheDir.uri.resolve(localFileName),
         );
         if (!prebuiltFile.existsSync()) {
-          final url = 'https://github.com/axel10/flutter_taglib/releases/download/desktop-binaries-v1.4.0/$remoteFileName';
+          final url = '$_githubDownloadBaseUrl/$remoteFileName';
           print('flutter_taglib: Downloading prebuilt binary from $url...');
           await _downloadFile(url, prebuiltFile);
         } else {
@@ -101,7 +105,7 @@ void main(List<String> args) async {
           cacheDir.uri.resolve(localFileName),
         );
         if (!prebuiltFile.existsSync()) {
-          final url = 'https://github.com/axel10/flutter_taglib/releases/download/desktop-binaries-v1.4.0/$remoteFileName';
+          final url = '$_githubDownloadBaseUrl/$remoteFileName';
           print('flutter_taglib: Downloading prebuilt Android binary from $url...');
           await _downloadFile(url, prebuiltFile);
         } else {
