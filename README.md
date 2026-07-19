@@ -91,6 +91,7 @@ void readMetadata(String filePath) {
     print('Comment:     ${file.comment}');
 
     // Read audio properties
+    print('Format:       ${file.format}'); // 'MP3', 'FLAC', 'OPUS', 'AAC', ...
     print('Duration:     ${file.duration}');
     print('Bitrate:      ${file.bitrate} kbps');
     print('Bitrate Mode: ${file.bitrateMode}'); // 'CBR', 'VBR', or 'Unknown'

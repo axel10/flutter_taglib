@@ -56,6 +56,9 @@ FFI_PLUGIN_EXPORT int taglib_bridge_get_bitrate(TagLibBridgeFile* file);  // kbp
 FFI_PLUGIN_EXPORT int taglib_bridge_get_samplerate(TagLibBridgeFile* file); // Hz
 FFI_PLUGIN_EXPORT int taglib_bridge_get_channels(TagLibBridgeFile* file);
 FFI_PLUGIN_EXPORT const char* taglib_bridge_get_bitrate_mode(TagLibBridgeFile* file);
+// Audio format detected from the file contents (e.g. "MP3", "FLAC", "OPUS", "AAC").
+// Returns NULL when the format could not be determined.
+FFI_PLUGIN_EXPORT const char* taglib_bridge_get_format(TagLibBridgeFile* file);
 
 // Album Art / Picture APIs
 FFI_PLUGIN_EXPORT int taglib_bridge_has_cover(TagLibBridgeFile* file);

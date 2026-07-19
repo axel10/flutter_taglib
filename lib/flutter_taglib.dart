@@ -509,10 +509,31 @@ class TagLibFile {
     return ptr.cast<Utf8>().toDartString();
   }
 
+  /// The audio format of the file, detected from its contents rather than its
+  /// file extension.
+  ///
+  /// Returns an uppercase token such as `MP3`, `FLAC`, `OPUS`, `VORBIS`, `AAC`,
+  /// `ALAC`, `WAV`, `AIFF`, `APE`, `WAVPACK`, `MPC`, `TTA`, `WMA`, `DSF`, `DFF`,
+  /// `OGGFLAC`, `SPEEX`, `MP1`, `MP2`, or a tracker format (`MOD`, `S3M`, `IT`,
+  /// `XM`). Formats that TagLib supports but this plugin does not name fall back
+  /// to a token derived from the underlying TagLib class, and `null` is returned
+  /// when the format cannot be determined at all.
+  ///
+  /// Note that MP4/M4A files report their codec (`AAC` or `ALAC`) instead of the
+  /// container, falling back to `MP4` when the codec cannot be determined.
+  String? get format {
+    _checkClosed();
+    final ptr = bindings.taglib_bridge_get_format(_handle);
+    if (ptr == ffi.nullptr) return null;
+    final value = ptr.cast<Utf8>().toDartString();
+    return value.isEmpty ? null : value;
+  }
+
   /// Detailed audio properties of the file.
   AudioInfo get audioInfo {
     _checkClosed();
     return AudioInfo(
+      format: format,
       duration: duration,
       bitrate: bitrate,
       bitrateMode: bitrateMode,
@@ -936,6 +957,9 @@ class AuthorizedDirectory {
 
 /// Represents detailed audio properties of a file.
 class AudioInfo {
+  /// The audio format (e.g., 'MP3', 'FLAC', 'OPUS'), or `null` if undetermined.
+  final String? format;
+
   /// The duration of the audio.
   final Duration duration;
 
@@ -953,6 +977,7 @@ class AudioInfo {
 
   /// Creates an [AudioInfo] instance representing detailed audio properties.
   AudioInfo({
+    required this.format,
     required this.duration,
     required this.bitrate,
     required this.bitrateMode,
@@ -962,7 +987,7 @@ class AudioInfo {
 
   @override
   String toString() =>
-      'AudioInfo(duration: $duration, bitrate: $bitrate kbps, bitrateMode: $bitrateMode, sampleRate: $sampleRate Hz, channels: $channels)';
+      'AudioInfo(format: $format, duration: $duration, bitrate: $bitrate kbps, bitrateMode: $bitrateMode, sampleRate: $sampleRate Hz, channels: $channels)';
 }
 
 /// Dummy class used by Flutter platform registration for Dart-only FFI platforms

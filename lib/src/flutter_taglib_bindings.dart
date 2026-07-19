@@ -137,6 +137,12 @@ ffi.Pointer<ffi.Char> taglib_bridge_get_bitrate_mode(
   return generated.taglib_bridge_get_bitrate_mode(file);
 }
 
+ffi.Pointer<ffi.Char> taglib_bridge_get_format(
+  ffi.Pointer<TagLibBridgeFile> file,
+) {
+  return generated.taglib_bridge_get_format(file);
+}
+
 int taglib_bridge_has_cover(ffi.Pointer<TagLibBridgeFile> file) {
   return generated.taglib_bridge_has_cover(file);
 }

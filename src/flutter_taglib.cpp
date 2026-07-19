@@ -12,14 +12,44 @@
 #include <flacfile.h>
 #include <ogg/vorbis/vorbisfile.h>
 #include <ogg/opus/opusfile.h>
+#include <ogg/speex/speexfile.h>
+#include <ogg/flac/oggflacfile.h>
 #include <mp4/mp4file.h>
+#include <mp4/mp4properties.h>
 #include <riff/wav/wavfile.h>
+#include <riff/aiff/aifffile.h>
+#include <ape/apefile.h>
+#include <wavpack/wavpackfile.h>
+#include <mpc/mpcfile.h>
+#include <trueaudio/trueaudiofile.h>
+#include <asf/asffile.h>
+#include <dsf/dsffile.h>
+#include <dsdiff/dsdifffile.h>
+#include <mod/modfile.h>
+#include <s3m/s3mfile.h>
+#include <it/itfile.h>
+#include <xm/xmfile.h>
 #include <tpropertymap.h>
 
 #include <string>
 #include <vector>
 #include <map>
+#include <unordered_map>
 #include <cstring>
+#include <cctype>
+#include <typeinfo>
+#include <typeindex>
+
+// Itanium ABI toolchains (Android, Apple, Linux) mangle typeid names and need
+// cxxabi.h to demangle them. MSVC-targeting compilers, including clang on
+// Windows, already report a readable name and ship no cxxabi.h.
+#if !defined(_MSC_VER) && defined(__has_include)
+#if __has_include(<cxxabi.h>)
+#include <cxxabi.h>
+#include <cstdlib>
+#define FLUTTER_TAGLIB_HAS_CXA_DEMANGLE 1
+#endif
+#endif
 
 #include <cstdio>
 #include <iostream>
@@ -189,6 +219,8 @@ struct TagLibBridgeFile {
     std::string cachedComment;
     std::string cachedCoverMime;
     std::string cachedBitrateMode;
+    std::string cachedFormat;
+    bool formatResolved = false;
 };
 
 struct TagLibBridgePictures {
@@ -237,6 +269,80 @@ static const TagLib::VariantMap* picture_at(const TagLibBridgePictures* pictures
         return nullptr;
     }
     return &pictures->cachedPictures[static_cast<size_t>(index)];
+}
+
+// Returns the runtime class name of a TagLib::File subclass, e.g.
+// "TagLib::FLAC::File". MSVC already reports a readable name; the Itanium ABI
+// (Clang/GCC on Android, Apple and Linux) reports a mangled name that needs
+// demangling. Returns an empty string when the name is unavailable.
+static std::string runtime_class_name(const TagLib::File* filePtr) {
+    if (!filePtr) return std::string();
+    const char* rawName = typeid(*filePtr).name();
+    if (!rawName) return std::string();
+
+#ifdef FLUTTER_TAGLIB_HAS_CXA_DEMANGLE
+    int status = 0;
+    char* demangled = abi::__cxa_demangle(rawName, nullptr, nullptr, &status);
+    if (status == 0 && demangled) {
+        std::string result(demangled);
+        std::free(demangled);
+        return result;
+    }
+    if (demangled) std::free(demangled);
+    return std::string();
+#else
+    return std::string(rawName);
+#endif
+}
+
+// Derives a format token from a TagLib class name for formats the explicit
+// dispatch below does not name, so newly supported TagLib formats still report
+// something useful instead of nothing. "TagLib::Shorten::File" yields "SHORTEN".
+static std::string format_token_from_class_name(const std::string& className) {
+    static const std::string fileSuffix = "::File";
+    if (className.size() <= fileSuffix.size()) return std::string();
+    if (className.compare(className.size() - fileSuffix.size(), fileSuffix.size(), fileSuffix) != 0) {
+        return std::string();
+    }
+
+    // "class TagLib::Ogg::Speex::File" -> "class TagLib::Ogg::Speex" -> "Speex"
+    std::string head = className.substr(0, className.size() - fileSuffix.size());
+    size_t separator = head.rfind("::");
+    std::string token = (separator == std::string::npos) ? head : head.substr(separator + 2);
+    if (token.empty() || token == "TagLib") return std::string();
+
+    for (auto& character : token) {
+        character = static_cast<char>(std::toupper(static_cast<unsigned char>(character)));
+    }
+    return token;
+}
+
+// Maps each concrete TagLib file class to its format token. Matching the exact
+// runtime type turns format detection into a single hash lookup instead of a
+// chain of dynamic_casts, and makes the order of entries irrelevant. Formats
+// whose token depends on the codec (MPEG, MP4) are resolved separately below.
+static const std::unordered_map<std::type_index, const char*>& format_token_table() {
+    static const std::unordered_map<std::type_index, const char*> table = {
+        {std::type_index(typeid(TagLib::FLAC::File)), "FLAC"},
+        {std::type_index(typeid(TagLib::Ogg::FLAC::File)), "OGGFLAC"},
+        {std::type_index(typeid(TagLib::Ogg::Vorbis::File)), "VORBIS"},
+        {std::type_index(typeid(TagLib::Ogg::Opus::File)), "OPUS"},
+        {std::type_index(typeid(TagLib::Ogg::Speex::File)), "SPEEX"},
+        {std::type_index(typeid(TagLib::RIFF::WAV::File)), "WAV"},
+        {std::type_index(typeid(TagLib::RIFF::AIFF::File)), "AIFF"},
+        {std::type_index(typeid(TagLib::APE::File)), "APE"},
+        {std::type_index(typeid(TagLib::WavPack::File)), "WAVPACK"},
+        {std::type_index(typeid(TagLib::MPC::File)), "MPC"},
+        {std::type_index(typeid(TagLib::TrueAudio::File)), "TTA"},
+        {std::type_index(typeid(TagLib::ASF::File)), "WMA"},
+        {std::type_index(typeid(TagLib::DSF::File)), "DSF"},
+        {std::type_index(typeid(TagLib::DSDIFF::File)), "DFF"},
+        {std::type_index(typeid(TagLib::Mod::File)), "MOD"},
+        {std::type_index(typeid(TagLib::S3M::File)), "S3M"},
+        {std::type_index(typeid(TagLib::IT::File)), "IT"},
+        {std::type_index(typeid(TagLib::XM::File)), "XM"},
+    };
+    return table;
 }
 
 static TagLib::VariantMap build_picture_map(
@@ -619,6 +725,59 @@ const char* taglib_bridge_get_bitrate_mode(TagLibBridgeFile* file) {
         return file->cachedBitrateMode.c_str();
     } catch (...) {
         return "";
+    }
+}
+
+const char* taglib_bridge_get_format(TagLibBridgeFile* file) {
+    if (!file || !file->fileRef || file->fileRef->isNull()) return nullptr;
+
+    // The format of an open file never changes, so resolve it only once.
+    if (file->formatResolved) {
+        return file->cachedFormat.empty() ? nullptr : file->cachedFormat.c_str();
+    }
+
+    try {
+        auto filePtr = file->fileRef->file();
+        if (!filePtr) return nullptr;
+
+        // The concrete TagLib::File subclass is resolved from the file contents,
+        // so this stays correct even for files with a wrong or missing extension.
+        const std::type_index fileType(typeid(*filePtr));
+
+        if (fileType == std::type_index(typeid(TagLib::MPEG::File))) {
+            // MPEG covers layers I/II/III, so report the actual layer.
+            auto mpegProps = dynamic_cast<TagLib::MPEG::Properties*>(file->fileRef->audioProperties());
+            switch (mpegProps ? mpegProps->layer() : 3) {
+                case 1: file->cachedFormat = "MP1"; break;
+                case 2: file->cachedFormat = "MP2"; break;
+                default: file->cachedFormat = "MP3"; break;
+            }
+        } else if (fileType == std::type_index(typeid(TagLib::MP4::File))) {
+            // Distinguish lossy AAC from lossless ALAC inside the MP4 container.
+            auto mp4Props = dynamic_cast<TagLib::MP4::Properties*>(file->fileRef->audioProperties());
+            if (mp4Props && mp4Props->codec() == TagLib::MP4::Properties::AAC) {
+                file->cachedFormat = "AAC";
+            } else if (mp4Props && mp4Props->codec() == TagLib::MP4::Properties::ALAC) {
+                file->cachedFormat = "ALAC";
+            } else {
+                file->cachedFormat = "MP4";
+            }
+        } else {
+            const auto& table = format_token_table();
+            const auto match = table.find(fileType);
+            if (match != table.end()) {
+                file->cachedFormat = match->second;
+            } else {
+                // A TagLib format this bridge does not name: derive a token from
+                // the runtime class name so it still reports something useful.
+                file->cachedFormat = format_token_from_class_name(runtime_class_name(filePtr));
+            }
+        }
+
+        file->formatResolved = true;
+        return file->cachedFormat.empty() ? nullptr : file->cachedFormat.c_str();
+    } catch (...) {
+        return nullptr;
     }
 }
 

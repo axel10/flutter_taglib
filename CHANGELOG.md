@@ -1,3 +1,6 @@
+## Unreleased
+* Added `TagLibFile.format` (and `AudioInfo.format`), reporting the audio format detected from the file contents (`MP3`, `FLAC`, `OPUS`, `AAC`, `ALAC`, `AIFF`, ...), or `null` when it cannot be determined.
+
 ## 1.4.1
 * Eliminate analyze info prompt
 

@@ -131,6 +131,39 @@ void main() {
     });
   });
 
+  group('TagLib Format Detection', () {
+    final expectedFormats = <String, Object>{
+      'mp3': 'MP3',
+      'flac': 'FLAC',
+      'ogg': 'VORBIS',
+      'opus': 'OPUS',
+      'wav': 'WAV',
+      'aiff': 'AIFF',
+      // The container reports its codec, which depends on how the asset was encoded.
+      'm4a': anyOf('AAC', 'ALAC', 'MP4'),
+    };
+
+    for (final entry in expectedFormats.entries) {
+      test('Detect ${entry.key.toUpperCase()} format', () {
+        final path =
+            'test/assets/01 TempleOS Hymn Risen (Remix).${entry.key}';
+        if (!File(path).existsSync()) {
+          markTestSkipped('Missing asset: $path');
+          return;
+        }
+
+        final file = TagLibFile.open(path);
+        expect(file, isNotNull);
+        if (file != null) {
+          print('${entry.key.toUpperCase()} Format: ${file.format}');
+          expect(file.format, entry.value);
+          expect(file.audioInfo.format, equals(file.format));
+          file.close();
+        }
+      });
+    }
+  });
+
   group('TagLib Metadata Modifying', () {
     late Directory tempDir;
     late File tempFile;
