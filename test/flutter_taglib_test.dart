@@ -171,7 +171,7 @@ void main() {
       );
       expect(file, isNotNull);
       if (file != null) {
-        final frontCover = file.frontCover;
+        final frontCover = file.coverData;
         final pictures = file.pictures;
 
         if (pictures.isEmpty) {
@@ -197,7 +197,7 @@ void main() {
       if (file != null) {
         // The native side caches then releases the bytes per call, so a second
         // read must return the same data rather than null or a truncated buffer.
-        expect(file.frontCover, equals(file.frontCover));
+        expect(file.coverData, equals(file.coverData));
         file.close();
       }
     });

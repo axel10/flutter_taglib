@@ -165,10 +165,6 @@ void handleCoverArt(TagLibFile file, Uint8List? newCoverBytes) {
     print('No cover art found.');
   }
 
-  // 1b. Bytes only: skips the other pictures and their metadata entirely,
-  //     which is cheaper when you just want to display the image.
-  final Uint8List? frontCover = file.frontCover;
-
   // 2. Set or Update Cover Art
   if (newCoverBytes != null) {
     file.setCover(data: newCoverBytes, mimeType: 'image/jpeg');
