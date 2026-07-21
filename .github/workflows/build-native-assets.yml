@@ -148,6 +148,10 @@ jobs:
     name: Build Android
     runs-on: ubuntu-22.04
 
+    env:
+      FLUTTER_TAGLIB_BUILD_ANDROID_FROM_SOURCE: "true"
+      FLUTTER_TAGLIB_RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -164,6 +168,11 @@ jobs:
 
       - name: Flutter pub get
         run: flutter pub get
+
+      - name: Enable android source build marker
+        shell: bash
+        run: |
+          touch .flutter_taglib_build_android_from_source
 
       - name: Build Android APK
         working-directory: example
