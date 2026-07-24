@@ -248,7 +248,11 @@ class TagLibFile {
       targetPath = grantedUri;
     }
 
-    if (Platform.isAndroid && targetPath.startsWith('content://')) {
+    final isLocalAndroid = Platform.isAndroid &&
+        !targetPath.startsWith('http://') &&
+        !targetPath.startsWith('https://');
+
+    if (isLocalAndroid) {
       final fd = await _openAndroidFileDescriptor(
         targetPath,
         mode: writeAccess ? 'rw' : 'r',

@@ -10,6 +10,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
+import android.provider.DocumentsContract
+import org.json.JSONObject
 import android.util.Log
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
@@ -92,7 +94,13 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
             return
         }
 
-        val originalUri = Uri.parse(uriStr)
+        var originalUri = Uri.parse(uriStr)
+        if (!uriStr.startsWith("content://") && !uriStr.startsWith("http://") && !uriStr.startsWith("https://")) {
+            val safUri = resolvePhysicalPathToSafUri(safeContext, uriStr)
+            if (safUri != null) {
+                originalUri = safUri
+            }
+        }
         Log.d(TAG, "handleRequestWritePermission: originalUri=$originalUri, authority=${originalUri.authority}")
         
         val isContentUri = originalUri.toString().startsWith("content://")
@@ -276,7 +284,35 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
             return
         }
 
-        val targetUri = Uri.parse(uriStr)
+        var targetUri = Uri.parse(uriStr)
+        if (!uriStr.startsWith("content://") && !uriStr.startsWith("http://") && !uriStr.startsWith("https://")) {
+            val safUri = resolvePhysicalPathToSafUri(safeContext, uriStr)
+            if (safUri != null) {
+                targetUri = safUri
+            } else {
+                val filePath = if (uriStr.startsWith("file://")) Uri.parse(uriStr).path else uriStr
+                if (filePath != null) {
+                    val file = java.io.File(filePath)
+                    if (file.exists() && file.canRead()) {
+                        try {
+                            val pfdMode = when (mode) {
+                                "r" -> android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                                "w" -> android.os.ParcelFileDescriptor.MODE_WRITE_ONLY
+                                "rw" -> android.os.ParcelFileDescriptor.MODE_READ_WRITE
+                                else -> android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                            }
+                            val pfd = android.os.ParcelFileDescriptor.open(file, pfdMode)
+                            val fd = pfd.detachFd()
+                            Log.d(TAG, "handleOpenFileDescriptor: opened fd=$fd via direct File for $uriStr")
+                            result.success(fd)
+                            return
+                        } catch (e: Exception) {
+                            Log.w(TAG, "handleOpenFileDescriptor: File direct open failed for $uriStr: ${e.message}")
+                        }
+                    }
+                }
+            }
+        }
         Log.d(TAG, "handleOpenFileDescriptor: targetUri=$targetUri mode=$mode")
 
         try {
@@ -301,6 +337,49 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
                 e,
             )
             result.error("OPEN_FAILED", "failed to open fd for $uriStr: ${e.message}", e.toString())
+        }
+    }
+
+    private fun resolvePhysicalPathToSafUri(context: Context, physicalPath: String): Uri? {
+        try {
+            val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val mappingsJson = prefs.getString("flutter.saf_tree_mappings_v1", null) ?: return null
+            val mappings = JSONObject(mappingsJson)
+            
+            val normalizedFile = java.io.File(physicalPath).absolutePath.lowercase()
+            var bestRoot: String? = null
+            var bestTreeUriStr: String? = null
+            
+            val keys = mappings.keys()
+            while (keys.hasNext()) {
+                val rootPath = keys.next()
+                val normalizedRoot = java.io.File(rootPath).absolutePath.lowercase()
+                if (normalizedFile.startsWith(normalizedRoot)) {
+                    if (bestRoot == null || rootPath.length > bestRoot.length) {
+                        bestRoot = rootPath
+                        bestTreeUriStr = mappings.getString(rootPath)
+                    }
+                }
+            }
+            
+            if (bestRoot == null || bestTreeUriStr == null) return null
+            
+            val relativePath = physicalPath.substring(bestRoot.length).trimStart('/', '\\')
+            val normalizedRelativePath = relativePath.replace('\\', '/')
+            
+            val treeUri = Uri.parse(bestTreeUriStr)
+            val treeId = DocumentsContract.getTreeDocumentId(treeUri)
+            
+            val childDocumentId = if (normalizedRelativePath.isEmpty()) {
+                treeId
+            } else {
+                "$treeId/$normalizedRelativePath"
+            }
+            
+            return DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocumentId)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error resolving path to SAF URI: ${e.message}", e)
+            return null
         }
     }
 
