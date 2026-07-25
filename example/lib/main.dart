@@ -101,6 +101,9 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   double _benchmarkProgress = 0.0;
   String? _benchmarkCurrentFile;
   int _benchmarkIterations = 1000;
+  int _benchmarkIsolateCount = 8;
+  TagLibAudioPropertiesStyle _benchmarkAudioPropertiesStyle =
+      TagLibAudioPropertiesStyle.fast;
   final _mockFileCountController = TextEditingController(text: '50');
   _BenchmarkResult? _benchmarkResult;
   _DirectoryBenchmarkResult? _dirBenchmarkResult;
@@ -712,7 +715,8 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       if (Platform.isAndroid && useSafScan) {
         scanModeLabel = 'SAF (DocumentTree)';
         setState(() {
-          _benchmarkCurrentFile = 'Scanning SAF DocumentTree via ContentResolver...';
+          _benchmarkCurrentFile =
+              'Scanning SAF DocumentTree via ContentResolver...';
         });
         final safUris = await TagLibFile.listSafDirectory(dirPath);
         audioFilePaths.addAll(safUris);
@@ -739,8 +743,11 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         String posixPath = dirPath;
         if (!posixPath.startsWith('/storage/')) {
           if (posixPath.contains('primary:')) {
-            final rel = posixPath.substring(posixPath.indexOf('primary:') + 'primary:'.length);
-            posixPath = '/storage/emulated/0/${rel.startsWith('/') ? rel.substring(1) : rel}';
+            final rel = posixPath.substring(
+              posixPath.indexOf('primary:') + 'primary:'.length,
+            );
+            posixPath =
+                '/storage/emulated/0/${rel.startsWith('/') ? rel.substring(1) : rel}';
           } else if (posixPath.startsWith('/sdcard')) {
             posixPath = '/storage/emulated/0${posixPath.substring(7)}';
           }
@@ -751,19 +758,19 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('Selected POSIX directory does not exist: $posixPath'),
+                content: Text(
+                  'Selected POSIX directory does not exist: $posixPath',
+                ),
               ),
             );
           }
           return;
         }
 
-        await for (final entity in dir.list(
-          recursive: true,
-          followLinks: false,
-        ).handleError((e) {
-          debugPrint('Directory list item error: $e');
-        })) {
+        await for (final entity
+            in dir.list(recursive: true, followLinks: false).handleError((e) {
+              debugPrint('Directory list item error: $e');
+            })) {
           if (entity is File) {
             final ext = entity.path.split('.').last.toLowerCase();
             if (supportedExtensions.contains(ext)) {
@@ -777,7 +784,9 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         if (!dir.existsSync()) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Selected directory does not exist: $dirPath')),
+            SnackBar(
+              content: Text('Selected directory does not exist: $dirPath'),
+            ),
           );
           return;
         }
@@ -800,7 +809,9 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('No supported audio files found ($scanModeLabel) in: $dirPath'),
+            content: Text(
+              'No supported audio files found ($scanModeLabel) in: $dirPath',
+            ),
           ),
         );
         return;
@@ -812,80 +823,123 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       final formatBreakdown = <String, int>{};
       final sampleSongs = <ScannedSongMetadata>[];
 
-      int totalOpenMicroseconds = 0;
-      int totalBasicPropertiesMicroseconds = 0;
-      int totalHasCoverMicroseconds = 0;
-
       final stopwatch = Stopwatch()..start();
 
-      for (int i = 0; i < totalFiles; i++) {
-        final filePath = audioFilePaths[i];
-        final ext = filePath.split('.').last.toUpperCase();
-        formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
+      if (!useSafScan) {
+        final batchResults = await TagLibFile.readBatchAsync(
+          audioFilePaths,
+          isolateCount: _benchmarkIsolateCount,
+          audioPropertiesStyle: _benchmarkAudioPropertiesStyle,
+          onProgress: (processed, total) {
+            if (!mounted) return;
+            setState(() {
+              _benchmarkProgress = processed / total;
+              _benchmarkCurrentFile =
+                  'Multi-Isolate Batch Scanning ($processed / $total)...';
+            });
+          },
+        );
 
-        final swOpen = Stopwatch()..start();
-        final f = await TagLibFile.openAsync(filePath);
-        swOpen.stop();
-        totalOpenMicroseconds += swOpen.elapsedMicroseconds;
+        for (final item in batchResults) {
+          final ext = item.path.split('.').last.toUpperCase();
+          formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
 
-        if (f != null) {
-          final swBasic = Stopwatch()..start();
-          final title = f.title;
-          final artist = f.artist;
-          final album = f.album;
-          final genre = f.genre;
-          final _ = f.comment;
-          final year = f.year;
-          final track = f.track;
-          final duration = f.duration;
-          final bitrate = f.bitrate;
-          final sampleRate = f.sampleRate;
-          final channels = f.channels;
-          swBasic.stop();
-          totalBasicPropertiesMicroseconds += swBasic.elapsedMicroseconds;
+          if (item.success) {
+            successCount++;
+            if (sampleSongs.length < 10) {
+              final fileName = item.path.split(Platform.pathSeparator).last;
+              sampleSongs.add(
+                ScannedSongMetadata(
+                  path: item.path,
+                  fileName: fileName,
+                  title: item.title.trim().isEmpty ? fileName : item.title,
+                  artist: item.artist.trim().isEmpty
+                      ? 'Unknown Artist'
+                      : item.artist,
+                  album: item.album.trim().isEmpty
+                      ? 'Unknown Album'
+                      : item.album,
+                  genre: item.genre.trim().isEmpty
+                      ? 'Unknown Genre'
+                      : item.genre,
+                  year: item.year,
+                  track: item.track,
+                  duration: item.duration,
+                  bitrate: item.bitrate,
+                  sampleRate: item.sampleRate,
+                  channels: item.channels,
+                  hasCover: item.hasCover,
+                ),
+              );
+            }
+          } else {
+            failCount++;
+          }
+        }
+      } else {
+        for (int i = 0; i < totalFiles; i++) {
+          final filePath = audioFilePaths[i];
+          final ext = filePath.split('.').last.toUpperCase();
+          formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
 
-          final swCover = Stopwatch()..start();
-          final hasCover = f.hasCover;
-          swCover.stop();
-          totalHasCoverMicroseconds += swCover.elapsedMicroseconds;
+          final f = await TagLibFile.openAsync(
+            filePath,
+            audioPropertiesStyle: _benchmarkAudioPropertiesStyle,
+          );
 
-          if (sampleSongs.length < 10) {
-            final fileName = filePath.startsWith('content://')
-                ? 'SAF Document'
-                : filePath.split(Platform.pathSeparator).last;
-            sampleSongs.add(
-              ScannedSongMetadata(
-                path: filePath,
-                fileName: fileName,
-                title: title.trim().isEmpty ? fileName : title,
-                artist: artist.trim().isEmpty ? 'Unknown Artist' : artist,
-                album: album.trim().isEmpty ? 'Unknown Album' : album,
-                genre: genre.trim().isEmpty ? 'Unknown Genre' : genre,
-                year: year,
-                track: track,
-                duration: duration,
-                bitrate: bitrate,
-                sampleRate: sampleRate,
-                channels: channels,
-                hasCover: hasCover,
-              ),
-            );
+          if (f != null) {
+            final title = f.title;
+            final artist = f.artist;
+            final album = f.album;
+            final genre = f.genre;
+            final _ = f.comment;
+            final year = f.year;
+            final track = f.track;
+            final duration = f.duration;
+            final bitrate = f.bitrate;
+            final sampleRate = f.sampleRate;
+            final channels = f.channels;
+            final hasCover = f.hasCover;
+
+            if (sampleSongs.length < 10) {
+              final fileName = filePath.startsWith('content://')
+                  ? 'SAF Document'
+                  : filePath.split(Platform.pathSeparator).last;
+              sampleSongs.add(
+                ScannedSongMetadata(
+                  path: filePath,
+                  fileName: fileName,
+                  title: title.trim().isEmpty ? fileName : title,
+                  artist: artist.trim().isEmpty ? 'Unknown Artist' : artist,
+                  album: album.trim().isEmpty ? 'Unknown Album' : album,
+                  genre: genre.trim().isEmpty ? 'Unknown Genre' : genre,
+                  year: year,
+                  track: track,
+                  duration: duration,
+                  bitrate: bitrate,
+                  sampleRate: sampleRate,
+                  channels: channels,
+                  hasCover: hasCover,
+                ),
+              );
+            }
+
+            f.close();
+            successCount++;
+          } else {
+            failCount++;
           }
 
-          f.close();
-          successCount++;
-        } else {
-          failCount++;
-        }
-
-        if (i % 20 == 0 || i == totalFiles - 1) {
-          if (!mounted) return;
-          setState(() {
-            _benchmarkProgress = (i + 1) / totalFiles;
-            _benchmarkCurrentFile =
-                filePath.split(Platform.pathSeparator).last;
-          });
-          await Future<void>.delayed(Duration.zero);
+          if (i % 20 == 0 || i == totalFiles - 1) {
+            if (!mounted) return;
+            setState(() {
+              _benchmarkProgress = (i + 1) / totalFiles;
+              _benchmarkCurrentFile = filePath
+                  .split(Platform.pathSeparator)
+                  .last;
+            });
+            await Future<void>.delayed(Duration.zero);
+          }
         }
       }
 
@@ -900,6 +954,8 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       debugPrint('''
 ========== [SCAN BENCHMARK DIAGNOSTICS] ==========
 Scan Mode: $scanModeLabel
+Isolates Count: $_benchmarkIsolateCount
+Audio Properties Mode: ${_benchmarkAudioPropertiesStyle.name}
 Target Directory: $dirPath
 Total Files Found: $totalFiles
 
@@ -908,18 +964,8 @@ Total Files Found: $totalFiles
 - Phase 2 (Tag Reading Loop):  $totalMs ms
 - Total Combined Time:        ${listStopwatch.elapsedMilliseconds + totalMs} ms
 
-[TagLib Step Timing Breakdown]
-- TagLibFile.openAsync time:       ${(totalOpenMicroseconds / 1000.0).toStringAsFixed(1)} ms (${(totalOpenMicroseconds / (totalFiles > 0 ? totalFiles : 1) / 1000.0).toStringAsFixed(2)} ms/file)
-- Basic Metadata Getters time:      ${(totalBasicPropertiesMicroseconds / 1000.0).toStringAsFixed(1)} ms (${(totalBasicPropertiesMicroseconds / (totalFiles > 0 ? totalFiles : 1) / 1000.0).toStringAsFixed(2)} ms/file)
-- hasCover Check time:             ${(totalHasCoverMicroseconds / 1000.0).toStringAsFixed(1)} ms (${(totalHasCoverMicroseconds / (totalFiles > 0 ? totalFiles : 1) / 1000.0).toStringAsFixed(2)} ms/file)
-
 [TagLib Parsing Performance]
 - Tag Reading Rate: ${opsPerSec.toStringAsFixed(1)} songs/sec (${avgMs.toStringAsFixed(2)} ms/song)
-
-[Open Method Statistics]
-- Direct FFI Open (Fast Path):     ${TagLibFile.lastOpenFfiCount} files
-- MethodChannel FD Fallback:      ${TagLibFile.lastOpenFdFallbackCount} files
-- Content URI Open (SAF):          ${TagLibFile.lastOpenContentUriCount} files
 ==================================================
 ''');
 
@@ -942,9 +988,9 @@ Total Files Found: $totalFiles
     } catch (e) {
       debugPrint('Directory benchmark error: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Directory benchmark failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Directory benchmark failed: $e')),
+        );
       }
     } finally {
       if (currentFilePath != null) {
@@ -1015,11 +1061,12 @@ Total Files Found: $totalFiles
       final scriptPath =
           '$rootDir${Platform.pathSeparator}example${Platform.pathSeparator}bin${Platform.pathSeparator}generate_benchmark_library.dart';
 
-      final process = await Process.start(
-        'dart',
-        ['run', scriptPath, '--dir=$targetDirName', '--count=$count'],
-        workingDirectory: rootDir,
-      );
+      final process = await Process.start('dart', [
+        'run',
+        scriptPath,
+        '--dir=$targetDirName',
+        '--count=$count',
+      ], workingDirectory: rootDir);
 
       final RegExp lineRegex = RegExp(r'\[(\d+)/(\d+)\] Created:\s*(.*)');
       final stderrBuffer = StringBuffer();
@@ -1038,11 +1085,17 @@ Total Files Found: $totalFiles
           final current = int.tryParse(match.group(1) ?? '') ?? 0;
           final total = int.tryParse(match.group(2) ?? '') ?? count;
           final fullPath = match.group(3) ?? '';
-          final fileName = fullPath.split('(').first.trim().split(Platform.pathSeparator).last;
+          final fileName = fullPath
+              .split('(')
+              .first
+              .trim()
+              .split(Platform.pathSeparator)
+              .last;
           if (mounted) {
             setState(() {
               _benchmarkProgress = (current / total).clamp(0.0, 1.0);
-              _benchmarkCurrentFile = '[$current/$total] Generating $fileName...';
+              _benchmarkCurrentFile =
+                  '[$current/$total] Generating $fileName...';
             });
           }
         } else if (line.contains('Generating cover art assets')) {
@@ -1832,10 +1885,7 @@ Total Files Found: $totalFiles
                     ],
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: modeSelector,
-                  ),
+                  SizedBox(width: double.infinity, child: modeSelector),
                 ] else ...[
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1878,8 +1928,14 @@ Total Files Found: $totalFiles
                       underline: const SizedBox.shrink(),
                       items: const [
                         DropdownMenuItem(value: 100, child: Text('100 Reads')),
-                        DropdownMenuItem(value: 1000, child: Text('1,000 Reads')),
-                        DropdownMenuItem(value: 5000, child: Text('5,000 Reads')),
+                        DropdownMenuItem(
+                          value: 1000,
+                          child: Text('1,000 Reads'),
+                        ),
+                        DropdownMenuItem(
+                          value: 5000,
+                          child: Text('5,000 Reads'),
+                        ),
                       ],
                       onChanged: _isBenchmarking
                           ? null
@@ -1908,12 +1964,24 @@ Total Files Found: $totalFiles
                         DropdownButton<int>(
                           value: _benchmarkIterations,
                           dropdownColor: const Color(0xFF1E293B),
-                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                          ),
                           underline: const SizedBox.shrink(),
                           items: const [
-                            DropdownMenuItem(value: 100, child: Text('100 Reads')),
-                            DropdownMenuItem(value: 1000, child: Text('1,000 Reads')),
-                            DropdownMenuItem(value: 5000, child: Text('5,000 Reads')),
+                            DropdownMenuItem(
+                              value: 100,
+                              child: Text('100 Reads'),
+                            ),
+                            DropdownMenuItem(
+                              value: 1000,
+                              child: Text('1,000 Reads'),
+                            ),
+                            DropdownMenuItem(
+                              value: 5000,
+                              child: Text('5,000 Reads'),
+                            ),
                           ],
                           onChanged: _isBenchmarking
                               ? null
@@ -1990,12 +2058,13 @@ Total Files Found: $totalFiles
                           GridView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: isCompact ? 140 : 200,
-                              mainAxisExtent: 64,
-                              mainAxisSpacing: 12,
-                              crossAxisSpacing: 12,
-                            ),
+                            gridDelegate:
+                                SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: isCompact ? 140 : 200,
+                                  mainAxisExtent: 64,
+                                  mainAxisSpacing: 12,
+                                  crossAxisSpacing: 12,
+                                ),
                             itemCount: 3,
                             itemBuilder: (context, index) {
                               switch (index) {
@@ -2060,7 +2129,7 @@ Total Files Found: $totalFiles
                           runSpacing: 12,
                           children: [
                             SizedBox(
-                              width: isCompact ? double.infinity : 140,
+                              width: isCompact ? double.infinity : 130,
                               child: TextFormField(
                                 controller: _mockFileCountController,
                                 keyboardType: TextInputType.number,
@@ -2076,6 +2145,75 @@ Total Files Found: $totalFiles
                                   ),
                                 ),
                               ),
+                            ),
+                            SizedBox(
+                              width: isCompact ? double.infinity : 150,
+                              child: DropdownButtonFormField<int>(
+                                initialValue: _benchmarkIsolateCount,
+                                decoration: const InputDecoration(
+                                  labelText: '并发 Isolates',
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 12,
+                                  ),
+                                ),
+                                items: [1, 2, 4, 8, 16].map((count) {
+                                  return DropdownMenuItem<int>(
+                                    value: count,
+                                    child: Text('$count Isolates'),
+                                  );
+                                }).toList(),
+                                onChanged: _isBenchmarking
+                                    ? null
+                                    : (val) {
+                                        if (val != null) {
+                                          setState(() {
+                                            _benchmarkIsolateCount = val;
+                                          });
+                                        }
+                                      },
+                              ),
+                            ),
+                            SizedBox(
+                              width: isCompact ? double.infinity : 150,
+                              child:
+                                  DropdownButtonFormField<
+                                    TagLibAudioPropertiesStyle
+                                  >(
+                                    initialValue:
+                                        _benchmarkAudioPropertiesStyle,
+                                    decoration: const InputDecoration(
+                                      labelText: 'TagLib 模式',
+                                      isDense: true,
+                                      contentPadding: EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 12,
+                                      ),
+                                    ),
+                                    items: TagLibAudioPropertiesStyle.values
+                                        .map((style) {
+                                          return DropdownMenuItem<
+                                            TagLibAudioPropertiesStyle
+                                          >(
+                                            value: style,
+                                            child: Text(
+                                              style.name.toUpperCase(),
+                                            ),
+                                          );
+                                        })
+                                        .toList(),
+                                    onChanged: _isBenchmarking
+                                        ? null
+                                        : (val) {
+                                            if (val != null) {
+                                              setState(() {
+                                                _benchmarkAudioPropertiesStyle =
+                                                    val;
+                                              });
+                                            }
+                                          },
+                                  ),
                             ),
                             ElevatedButton.icon(
                               onPressed: _isBenchmarking
@@ -2183,7 +2321,9 @@ Total Files Found: $totalFiles
                                     _runDirectoryBenchmark(localMockLibPath),
                                 style: OutlinedButton.styleFrom(
                                   foregroundColor: const Color(0xFF34D399),
-                                  side: const BorderSide(color: Color(0xFF34D399)),
+                                  side: const BorderSide(
+                                    color: Color(0xFF34D399),
+                                  ),
                                   padding: const EdgeInsets.symmetric(
                                     horizontal: 16,
                                     vertical: 12,
@@ -2270,12 +2410,13 @@ Total Files Found: $totalFiles
                           GridView.builder(
                             shrinkWrap: true,
                             physics: const NeverScrollableScrollPhysics(),
-                            gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
-                              maxCrossAxisExtent: isCompact ? 140 : 180,
-                              mainAxisExtent: 64,
-                              mainAxisSpacing: 12,
-                              crossAxisSpacing: 12,
-                            ),
+                            gridDelegate:
+                                SliverGridDelegateWithMaxCrossAxisExtent(
+                                  maxCrossAxisExtent: isCompact ? 140 : 180,
+                                  mainAxisExtent: 64,
+                                  mainAxisSpacing: 12,
+                                  crossAxisSpacing: 12,
+                                ),
                             itemCount: 4,
                             itemBuilder: (context, index) {
                               switch (index) {
@@ -2333,7 +2474,9 @@ Total Files Found: $totalFiles
                                     ),
                                   ),
                                   backgroundColor: const Color(0xFF1E293B),
-                                  side: const BorderSide(color: Color(0xFF475569)),
+                                  side: const BorderSide(
+                                    color: Color(0xFF475569),
+                                  ),
                                   visualDensity: VisualDensity.compact,
                                 );
                               }).toList(),
@@ -2372,10 +2515,7 @@ Total Files Found: $totalFiles
             ),
             Text(
               'First 10 items preview',
-              style: TextStyle(
-                fontSize: 11,
-                color: Colors.grey.shade400,
-              ),
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade400),
             ),
           ],
         ),
@@ -2500,9 +2640,7 @@ Total Files Found: $totalFiles
                         const Color(0xFF334155),
                       ),
                       _buildChip(
-                        song.channels == 2
-                            ? 'Stereo'
-                            : '${song.channels}ch',
+                        song.channels == 2 ? 'Stereo' : '${song.channels}ch',
                         const Color(0xFF334155),
                       ),
                       if (song.genre != 'Unknown Genre')

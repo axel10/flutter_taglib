@@ -1,8 +1,10 @@
 /// A high-performance, feature-rich Flutter plugin wrapping TagLib using Dart FFI and Native Assets.
 library;
 
+import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:io' show Platform;
+import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint;
@@ -60,6 +62,43 @@ enum TagLibAudioPropertiesStyle {
 
   final int value;
   const TagLibAudioPropertiesStyle(this.value);
+}
+
+/// Lightweight song metadata record returned from batch scanning across worker Isolates.
+class BatchTagMetadata {
+  const BatchTagMetadata({
+    required this.path,
+    required this.title,
+    required this.artist,
+    required this.album,
+    required this.genre,
+    this.comment = '',
+    required this.year,
+    required this.track,
+    required this.duration,
+    required this.bitrate,
+    required this.sampleRate,
+    required this.channels,
+    required this.hasCover,
+    required this.success,
+    this.error,
+  });
+
+  final String path;
+  final String title;
+  final String artist;
+  final String album;
+  final String genre;
+  final String comment;
+  final int year;
+  final int track;
+  final Duration duration;
+  final int bitrate;
+  final int sampleRate;
+  final int channels;
+  final bool hasCover;
+  final bool success;
+  final String? error;
 }
 
 class TagLibFile {
@@ -387,6 +426,135 @@ class TagLibFile {
     lastError = 'Failed to open path via TagLib bridge for "$targetPath". File might be corrupted or not exist.';
     debugPrint('[flutter_taglib] $lastError');
     return null;
+  }
+
+  /// Batch reads metadata for a list of file paths across multiple worker Isolates concurrently.
+  ///
+  /// [filePaths]: List of file paths to process.
+  /// [isolateCount]: Number of parallel Isolates to spawn (defaults to 4).
+  /// [audioPropertiesStyle]: TagLib audio properties reading style.
+  /// [onProgress]: Optional progress callback reported as (processedCount, totalCount).
+  static Future<List<BatchTagMetadata>> readBatchAsync(
+    List<String> filePaths, {
+    int isolateCount = 4,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
+    void Function(int processedCount, int totalCount)? onProgress,
+  }) async {
+    if (filePaths.isEmpty) return [];
+
+    if (Platform.isWindows || Platform.isLinux) {
+      await prepareDesktopLibrary();
+    }
+    if (!isSupported) {
+      throw UnsupportedError(
+        'flutter_taglib is not supported or has been disabled on this platform.',
+      );
+    }
+
+    final effectiveIsolates = isolateCount.clamp(1, filePaths.length);
+    final chunkSize = (filePaths.length / effectiveIsolates).ceil();
+
+    final receivePort = ReceivePort();
+    final completer = Completer<List<BatchTagMetadata>>();
+
+    final activeWorkers = <int>{};
+    final workerProgress = <int, int>{};
+    final workerResults = <int, List<Map<String, dynamic>>>{};
+
+    for (int i = 0; i < effectiveIsolates; i++) {
+      final start = i * chunkSize;
+      final end = (start + chunkSize).clamp(0, filePaths.length);
+      if (start >= end) continue;
+
+      final chunk = filePaths.sublist(start, end);
+      activeWorkers.add(i);
+      workerProgress[i] = 0;
+
+      final params = _TagLibBatchWorkerParams(
+        sendPort: receivePort.sendPort,
+        workerId: i,
+        paths: chunk,
+        audioPropertiesStyleValue: audioPropertiesStyle.value,
+      );
+
+      try {
+        await Isolate.spawn(_tagLibBatchWorkerEntryPoint, params);
+      } catch (e) {
+        _logger.warning('Failed to spawn worker Isolate $i: $e');
+        activeWorkers.remove(i);
+        final fallbackResults = <Map<String, dynamic>>[];
+        for (final p in chunk) {
+          final item = _readSingleFileMetadataMap(p, audioPropertiesStyle.value);
+          fallbackResults.add(item);
+        }
+        workerResults[i] = fallbackResults;
+        workerProgress[i] = chunk.length;
+      }
+    }
+
+    if (activeWorkers.isEmpty) {
+      receivePort.close();
+      return _buildCombinedBatchResults(effectiveIsolates, workerResults);
+    }
+
+    receivePort.listen((message) {
+      if (message is Map<String, dynamic>) {
+        final type = message['type'] as String;
+        final workerId = message['workerId'] as int;
+
+        if (type == 'progress') {
+          final processed = message['processed'] as int;
+          workerProgress[workerId] = processed;
+          final totalProcessed = workerProgress.values.fold(0, (sum, val) => sum + val);
+          onProgress?.call(totalProcessed, filePaths.length);
+        } else if (type == 'complete') {
+          final results = (message['results'] as List).cast<Map<String, dynamic>>();
+          workerResults[workerId] = results;
+          activeWorkers.remove(workerId);
+
+          if (activeWorkers.isEmpty) {
+            receivePort.close();
+            completer.complete(
+              _buildCombinedBatchResults(effectiveIsolates, workerResults),
+            );
+          }
+        }
+      }
+    });
+
+    return completer.future;
+  }
+
+  static List<BatchTagMetadata> _buildCombinedBatchResults(
+    int totalWorkers,
+    Map<int, List<Map<String, dynamic>>> workerResults,
+  ) {
+    final combined = <BatchTagMetadata>[];
+    for (int id = 0; id < totalWorkers; id++) {
+      final list = workerResults[id] ?? [];
+      for (final item in list) {
+        combined.add(
+          BatchTagMetadata(
+            path: item['path'] as String,
+            title: (item['title'] as String?) ?? '',
+            artist: (item['artist'] as String?) ?? '',
+            album: (item['album'] as String?) ?? '',
+            genre: (item['genre'] as String?) ?? '',
+            comment: (item['comment'] as String?) ?? '',
+            year: (item['year'] as int?) ?? 0,
+            track: (item['track'] as int?) ?? 0,
+            duration: Duration(milliseconds: (item['durationMs'] as int?) ?? 0),
+            bitrate: (item['bitrate'] as int?) ?? 0,
+            sampleRate: (item['sampleRate'] as int?) ?? 0,
+            channels: (item['channels'] as int?) ?? 0,
+            hasCover: item['hasCover'] == true,
+            success: item['success'] == true,
+            error: item['error'] as String?,
+          ),
+        );
+      }
+    }
+    return combined;
   }
 
   /// Opens an audio file by its Unix File Descriptor (FD).
@@ -1232,4 +1400,110 @@ abstract final class TagProperties {
 
   /// The related URL (URL).
   static const String url = 'URL';
+}
+
+class _TagLibBatchWorkerParams {
+  final SendPort sendPort;
+  final int workerId;
+  final List<String> paths;
+  final int audioPropertiesStyleValue;
+
+  _TagLibBatchWorkerParams({
+    required this.sendPort,
+    required this.workerId,
+    required this.paths,
+    required this.audioPropertiesStyleValue,
+  });
+}
+
+Map<String, dynamic> _readSingleFileMetadataMap(String filePath, int styleValue) {
+  final pathPtr = filePath.toNativeUtf8();
+  try {
+    final handle = bindings.taglib_bridge_open_with_style(
+      pathPtr.cast<ffi.Char>(),
+      styleValue,
+    );
+    if (handle != ffi.nullptr) {
+      final titlePtr = bindings.taglib_bridge_get_title(handle);
+      final title = titlePtr != ffi.nullptr ? titlePtr.cast<Utf8>().toDartString() : '';
+
+      final artistPtr = bindings.taglib_bridge_get_artist(handle);
+      final artist = artistPtr != ffi.nullptr ? artistPtr.cast<Utf8>().toDartString() : '';
+
+      final albumPtr = bindings.taglib_bridge_get_album(handle);
+      final album = albumPtr != ffi.nullptr ? albumPtr.cast<Utf8>().toDartString() : '';
+
+      final genrePtr = bindings.taglib_bridge_get_genre(handle);
+      final genre = genrePtr != ffi.nullptr ? genrePtr.cast<Utf8>().toDartString() : '';
+
+      final commentPtr = bindings.taglib_bridge_get_comment(handle);
+      final comment = commentPtr != ffi.nullptr ? commentPtr.cast<Utf8>().toDartString() : '';
+
+      final year = bindings.taglib_bridge_get_year(handle);
+      final track = bindings.taglib_bridge_get_track(handle);
+      final durationMs = bindings.taglib_bridge_get_duration(handle);
+      final bitrate = bindings.taglib_bridge_get_bitrate(handle);
+      final sampleRate = bindings.taglib_bridge_get_samplerate(handle);
+      final channels = bindings.taglib_bridge_get_channels(handle);
+      final hasCover = bindings.taglib_bridge_has_cover(handle) != 0;
+
+      bindings.taglib_bridge_close(handle);
+
+      return {
+        'path': filePath,
+        'title': title,
+        'artist': artist,
+        'album': album,
+        'genre': genre,
+        'comment': comment,
+        'year': year,
+        'track': track,
+        'durationMs': durationMs,
+        'bitrate': bitrate,
+        'sampleRate': sampleRate,
+        'channels': channels,
+        'hasCover': hasCover,
+        'success': true,
+      };
+    } else {
+      return {
+        'path': filePath,
+        'success': false,
+      };
+    }
+  } catch (e) {
+    return {
+      'path': filePath,
+      'success': false,
+      'error': e.toString(),
+    };
+  } finally {
+    malloc.free(pathPtr);
+  }
+}
+
+void _tagLibBatchWorkerEntryPoint(_TagLibBatchWorkerParams params) {
+  final sendPort = params.sendPort;
+  final paths = params.paths;
+  final styleValue = params.audioPropertiesStyleValue;
+  final results = <Map<String, dynamic>>[];
+
+  for (int i = 0; i < paths.length; i++) {
+    final item = _readSingleFileMetadataMap(paths[i], styleValue);
+    results.add(item);
+
+    if ((i + 1) % 10 == 0 || i == paths.length - 1) {
+      sendPort.send({
+        'type': 'progress',
+        'workerId': params.workerId,
+        'processed': i + 1,
+      });
+    }
+  }
+
+  sendPort.send({
+    'type': 'complete',
+    'workerId': params.workerId,
+    'results': results,
+  });
 }
