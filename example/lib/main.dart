@@ -807,6 +807,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       int successCount = 0;
       int failCount = 0;
       final formatBreakdown = <String, int>{};
+      final sampleSongs = <ScannedSongMetadata>[];
 
       final stopwatch = Stopwatch()..start();
 
@@ -817,18 +818,42 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
 
         final f = await TagLibFile.openAsync(filePath);
         if (f != null) {
-          final _ = f.title;
-          final _ = f.artist;
-          final _ = f.album;
-          final _ = f.genre;
+          final title = f.title;
+          final artist = f.artist;
+          final album = f.album;
+          final genre = f.genre;
           final _ = f.comment;
-          final _ = f.year;
-          final _ = f.track;
-          final _ = f.duration;
-          final _ = f.bitrate;
-          final _ = f.sampleRate;
-          final _ = f.channels;
-          final _ = f.hasCover;
+          final year = f.year;
+          final track = f.track;
+          final duration = f.duration;
+          final bitrate = f.bitrate;
+          final sampleRate = f.sampleRate;
+          final channels = f.channels;
+          final hasCover = f.hasCover;
+
+          if (sampleSongs.length < 10) {
+            final fileName = filePath.startsWith('content://')
+                ? 'SAF Document'
+                : filePath.split(Platform.pathSeparator).last;
+            sampleSongs.add(
+              ScannedSongMetadata(
+                path: filePath,
+                fileName: fileName,
+                title: title.trim().isEmpty ? fileName : title,
+                artist: artist.trim().isEmpty ? 'Unknown Artist' : artist,
+                album: album.trim().isEmpty ? 'Unknown Album' : album,
+                genre: genre.trim().isEmpty ? 'Unknown Genre' : genre,
+                year: year,
+                track: track,
+                duration: duration,
+                bitrate: bitrate,
+                sampleRate: sampleRate,
+                channels: channels,
+                hasCover: hasCover,
+              ),
+            );
+          }
+
           f.close();
           successCount++;
         } else {
@@ -866,6 +891,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
           avgMsPerFile: avgMs,
           opsPerSec: opsPerSec,
           formatBreakdown: formatBreakdown,
+          firstSongs: sampleSongs,
           scanMode: scanModeLabel,
         );
       });
@@ -2269,6 +2295,8 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
                               }).toList(),
                             ),
                           ],
+                          if (dirResult.firstSongs.isNotEmpty)
+                            _buildScannedSongsList(dirResult.firstSongs),
                         ],
                       ),
                     ),
@@ -2277,6 +2305,192 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
               ],
             );
           },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildScannedSongsList(List<ScannedSongMetadata> songs) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(color: Color(0xFF334155), height: 24),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Top ${songs.length} Scanned Songs Metadata',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF818CF8),
+              ),
+            ),
+            Text(
+              'First 10 items preview',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey.shade400,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: songs.length,
+          separatorBuilder: (context, index) => const SizedBox(height: 8),
+          itemBuilder: (context, index) {
+            final song = songs[index];
+            final ext = song.fileName.contains('.')
+                ? song.fileName.split('.').last.toUpperCase()
+                : 'AUDIO';
+            return Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1E293B),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF334155)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF6366F1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '#${index + 1}',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          song.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          foregroundColor: const Color(0xFF818CF8),
+                        ),
+                        onPressed: () {
+                          _loadFile(song.path, name: song.fileName);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Loaded "${song.title}" into Metadata Editor',
+                              ),
+                              duration: const Duration(seconds: 2),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.edit, size: 14),
+                        label: const Text(
+                          'Edit',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      Icon(Icons.person, size: 13, color: Colors.grey.shade400),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          '${song.artist} • ${song.album}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey.shade300,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 4,
+                    children: [
+                      _buildChip(ext, const Color(0xFF0284C7)),
+                      _buildChip(
+                        _formatDuration(song.duration),
+                        const Color(0xFF334155),
+                      ),
+                      _buildChip(
+                        '${song.bitrate} kbps',
+                        const Color(0xFF334155),
+                      ),
+                      _buildChip(
+                        '${(song.sampleRate / 1000).toStringAsFixed(1)} kHz',
+                        const Color(0xFF334155),
+                      ),
+                      _buildChip(
+                        song.channels == 2
+                            ? 'Stereo'
+                            : '${song.channels}ch',
+                        const Color(0xFF334155),
+                      ),
+                      if (song.genre != 'Unknown Genre')
+                        _buildChip(song.genre, const Color(0xFF10B981)),
+                      if (song.year > 0)
+                        _buildChip('${song.year}', const Color(0xFF475569)),
+                      if (song.hasCover)
+                        _buildChip('🎨 Cover', const Color(0xFF8B5CF6)),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildChip(String label, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontSize: 10,
+          color: Colors.white,
+          fontWeight: FontWeight.w500,
         ),
       ),
     );
@@ -2331,6 +2545,38 @@ class _BenchmarkResult {
   });
 }
 
+class ScannedSongMetadata {
+  final String path;
+  final String fileName;
+  final String title;
+  final String artist;
+  final String album;
+  final String genre;
+  final int year;
+  final int track;
+  final Duration duration;
+  final int bitrate;
+  final int sampleRate;
+  final int channels;
+  final bool hasCover;
+
+  ScannedSongMetadata({
+    required this.path,
+    required this.fileName,
+    required this.title,
+    required this.artist,
+    required this.album,
+    required this.genre,
+    required this.year,
+    required this.track,
+    required this.duration,
+    required this.bitrate,
+    required this.sampleRate,
+    required this.channels,
+    required this.hasCover,
+  });
+}
+
 class _DirectoryBenchmarkResult {
   final String directoryPath;
   final int totalFilesFound;
@@ -2340,6 +2586,7 @@ class _DirectoryBenchmarkResult {
   final double avgMsPerFile;
   final double opsPerSec;
   final Map<String, int> formatBreakdown;
+  final List<ScannedSongMetadata> firstSongs;
   final String? scanMode;
 
   _DirectoryBenchmarkResult({
@@ -2351,6 +2598,7 @@ class _DirectoryBenchmarkResult {
     required this.avgMsPerFile,
     required this.opsPerSec,
     required this.formatBreakdown,
+    this.firstSongs = const [],
     this.scanMode,
   });
 }
