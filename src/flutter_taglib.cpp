@@ -539,32 +539,7 @@ TagLibBridgeFile* taglib_bridge_open_with_style(const char* filepath, int read_s
         if (fileRef->isNull()) {
             delete fileRef;
 #ifdef __ANDROID__
-            if (g_context != nullptr) {
-                JNIEnv* env = get_jni_env();
-                if (env) {
-                    jclass pluginClass = env->FindClass("com/axel10/flutter_taglib/FlutterTaglibPlugin");
-                    if (pluginClass) {
-                        jmethodID resolveMethod = env->GetStaticMethodID(pluginClass, "resolvePathToSafUriStr", "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;");
-                        if (resolveMethod) {
-                            jstring jpath = env->NewStringUTF(filepath);
-                            jstring juri = (jstring)env->CallStaticObjectMethod(pluginClass, resolveMethod, g_context, jpath);
-                            env->DeleteLocalRef(jpath);
-                            if (juri) {
-                                const char* safUriStr = env->GetStringUTFChars(juri, nullptr);
-                                LOGI("taglib_bridge_open: POSIX open failed, resolved SAF URI: %s", safUriStr);
-                                int fd = open_content_uri_fd(safUriStr, "r");
-                                env->ReleaseStringUTFChars(juri, safUriStr);
-                                env->DeleteLocalRef(juri);
-                                env->DeleteLocalRef(pluginClass);
-                                if (fd != -1) {
-                                    return taglib_bridge_open_fd_with_style(fd, read_style);
-                                }
-                            }
-                        }
-                        env->DeleteLocalRef(pluginClass);
-                    }
-                }
-            }
+            // POSIX open failed for Android filepath.
 #endif
             LOGE("taglib_bridge_open: fileRef is null (invalid file or format) for: %s", filepath);
             return nullptr;
