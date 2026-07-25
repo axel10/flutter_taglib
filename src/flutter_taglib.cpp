@@ -228,7 +228,21 @@ struct TagLibBridgeFile {
     std::string cachedBitrateMode;
     std::string cachedFormat;
     bool formatResolved = false;
+
+    int cachedLossless = -1;
+    bool losslessResolved = false;
+
+    int cachedHasCover = -1;
+    bool hasCoverResolved = false;
+
     TagLib::ByteVector cachedFrontCover;
+
+    void invalidateCaches() {
+        formatResolved = false;
+        losslessResolved = false;
+        hasCoverResolved = false;
+        cachedFrontCover = TagLib::ByteVector();
+    }
 };
 
 struct TagLibBridgePictures {
@@ -833,70 +847,71 @@ const char* taglib_bridge_get_format(TagLibBridgeFile* file) {
 
 int taglib_bridge_is_lossless(TagLibBridgeFile* file) {
     if (!file || !file->fileRef || file->fileRef->isNull()) return kLosslessUnknown;
+    if (file->losslessResolved) return file->cachedLossless;
     try {
         auto filePtr = file->fileRef->file();
-        if (!filePtr) return kLosslessUnknown;
+        if (!filePtr) {
+            file->cachedLossless = kLosslessUnknown;
+            file->losslessResolved = true;
+            return kLosslessUnknown;
+        }
 
         const std::type_index fileType(typeid(*filePtr));
         auto audioProps = file->fileRef->audioProperties();
+
+        int verdict = kLosslessUnknown;
 
         // Containers that can hold either a lossy or a lossless stream must be
         // resolved from the stream itself rather than from the format.
         if (fileType == std::type_index(typeid(TagLib::MP4::File))) {
             auto props = dynamic_cast<TagLib::MP4::Properties*>(audioProps);
-            if (!props) return kLosslessUnknown;
-            if (props->codec() == TagLib::MP4::Properties::ALAC) return kLossless;
-            if (props->codec() == TagLib::MP4::Properties::AAC) return kLossy;
-            return kLosslessUnknown;
-        }
-
-        if (fileType == std::type_index(typeid(TagLib::ASF::File))) {
+            if (props) {
+                if (props->codec() == TagLib::MP4::Properties::ALAC) verdict = kLossless;
+                else if (props->codec() == TagLib::MP4::Properties::AAC) verdict = kLossy;
+            }
+        } else if (fileType == std::type_index(typeid(TagLib::ASF::File))) {
             auto props = dynamic_cast<TagLib::ASF::Properties*>(audioProps);
-            if (!props) return kLosslessUnknown;
-            switch (props->codec()) {
-                case TagLib::ASF::Properties::WMA9Lossless: return kLossless;
-                case TagLib::ASF::Properties::WMA1:
-                case TagLib::ASF::Properties::WMA2:
-                case TagLib::ASF::Properties::WMA9Pro: return kLossy;
-                default: return kLosslessUnknown;
+            if (props) {
+                switch (props->codec()) {
+                    case TagLib::ASF::Properties::WMA9Lossless: verdict = kLossless; break;
+                    case TagLib::ASF::Properties::WMA1:
+                    case TagLib::ASF::Properties::WMA2:
+                    case TagLib::ASF::Properties::WMA9Pro: verdict = kLossy; break;
+                    default: verdict = kLosslessUnknown; break;
+                }
             }
-        }
-
-        if (fileType == std::type_index(typeid(TagLib::WavPack::File))) {
-            // WavPack has a hybrid mode, so the file itself carries the answer.
+        } else if (fileType == std::type_index(typeid(TagLib::WavPack::File))) {
             auto props = dynamic_cast<TagLib::WavPack::Properties*>(audioProps);
-            return props ? (props->isLossless() ? kLossless : kLossy) : kLosslessUnknown;
-        }
-
-        if (fileType == std::type_index(typeid(TagLib::RIFF::WAV::File))) {
+            verdict = props ? (props->isLossless() ? kLossless : kLossy) : kLosslessUnknown;
+        } else if (fileType == std::type_index(typeid(TagLib::RIFF::WAV::File))) {
             auto props = dynamic_cast<TagLib::RIFF::WAV::Properties*>(audioProps);
-            if (!props) return kLosslessUnknown;
-            // WAVE format tags per RFC 2361: PCM and IEEE float store samples
-            // verbatim. EXTENSIBLE wraps a subformat TagLib does not expose, but
-            // in practice it is used for multichannel or high-bit-depth PCM.
-            switch (props->format()) {
-                case 0x0001: // WAVE_FORMAT_PCM
-                case 0x0003: // WAVE_FORMAT_IEEE_FLOAT
-                case 0xFFFE: // WAVE_FORMAT_EXTENSIBLE
-                    return kLossless;
-                case 0x0000: // unknown / unset
-                    return kLosslessUnknown;
-                default:
-                    return kLossy;
+            if (props) {
+                switch (props->format()) {
+                    case 0x0001: // WAVE_FORMAT_PCM
+                    case 0x0003: // WAVE_FORMAT_IEEE_FLOAT
+                    case 0xFFFE: // WAVE_FORMAT_EXTENSIBLE
+                        verdict = kLossless; break;
+                    case 0x0000: // unknown / unset
+                        verdict = kLosslessUnknown; break;
+                    default:
+                        verdict = kLossy; break;
+                }
             }
-        }
-
-        if (fileType == std::type_index(typeid(TagLib::RIFF::AIFF::File))) {
+        } else if (fileType == std::type_index(typeid(TagLib::RIFF::AIFF::File))) {
             auto props = dynamic_cast<TagLib::RIFF::AIFF::Properties*>(audioProps);
-            if (!props) return kLosslessUnknown;
-            // Plain AIFF is always uncompressed PCM; only AIFF-C can compress.
-            if (!props->isAiffC()) return kLossless;
-            return is_lossless_aifc_compression(props->compressionType()) ? kLossless : kLossy;
+            if (props) {
+                if (!props->isAiffC()) verdict = kLossless;
+                else verdict = is_lossless_aifc_compression(props->compressionType()) ? kLossless : kLossy;
+            }
+        } else {
+            const auto& table = lossless_table();
+            const auto match = table.find(fileType);
+            verdict = (match != table.end()) ? match->second : kLosslessUnknown;
         }
 
-        const auto& table = lossless_table();
-        const auto match = table.find(fileType);
-        return match != table.end() ? match->second : kLosslessUnknown;
+        file->cachedLossless = verdict;
+        file->losslessResolved = true;
+        return file->cachedLossless;
     } catch (...) {
         return kLosslessUnknown;
     }
@@ -904,9 +919,12 @@ int taglib_bridge_is_lossless(TagLibBridgeFile* file) {
 
 int taglib_bridge_has_cover(TagLibBridgeFile* file) {
     if (!file || !file->fileRef || file->fileRef->isNull()) return 0;
+    if (file->hasCoverResolved) return file->cachedHasCover;
     try {
         auto pictures = read_picture_list(file);
-        return !pictures.isEmpty() ? 1 : 0;
+        file->cachedHasCover = !pictures.isEmpty() ? 1 : 0;
+        file->hasCoverResolved = true;
+        return file->cachedHasCover;
     } catch (...) {
         return 0;
     }
@@ -1004,6 +1022,7 @@ int taglib_bridge_front_cover_data(TagLibBridgeFile* file, uint8_t* buffer, uint
 int taglib_bridge_set_cover(TagLibBridgeFile* file, const char* mime_type, const uint8_t* data, uint32_t size) {
     if (!file || !file->fileRef || file->fileRef->isNull()) return 0;
     try {
+        file->invalidateCaches();
         TagLib::List<TagLib::VariantMap> pictures;
         if (size > 0 && data != nullptr) {
             pictures.append(build_picture_map(data, size, mime_type, "Front Cover", nullptr));
@@ -1037,6 +1056,7 @@ TagLibBridgePictures* taglib_bridge_pictures_get(TagLibBridgeFile* file) {
 int taglib_bridge_pictures_set(TagLibBridgeFile* file, TagLibBridgePictures* pictures) {
     if (!file || !file->fileRef || file->fileRef->isNull() || !pictures) return 0;
     try {
+        file->invalidateCaches();
         return file->fileRef->setComplexProperties("PICTURE", pictures->pictures) ? 1 : 0;
     } catch (...) {
         return 0;
