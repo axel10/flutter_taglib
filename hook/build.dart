@@ -6,7 +6,7 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 import 'package:logging/logging.dart';
 import 'package:hooks/hooks.dart';
 
-const String _prebuiltReleaseTag = 'desktop-binaries-v1.5.0';
+const String _prebuiltReleaseTag = 'desktop-binaries-v1.5.1';
 const String _githubDownloadBaseUrl =
     'https://github.com/axel10/flutter_taglib/releases/download/$_prebuiltReleaseTag';
 
@@ -91,7 +91,7 @@ void main(List<String> args) async {
           .toLowerCase();
       final abi = _mapArchitectureToAndroidAbi(archStr);
       if (abi != null && abi != 'x86') {
-        final remoteFileName = 'flutter_taglib_android_$abi.so';
+        final remoteFileName = 'libflutter_taglib_android_$abi.so';
         final localFileName = 'libflutter_taglib_native.so';
 
         final cacheDir = Directory.fromUri(
