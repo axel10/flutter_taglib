@@ -472,5 +472,21 @@ void main() {
       expect(newProps[TagProperties.composer], equals(['Custom Composer']));
       file2.close();
     });
+
+    test('Batch read with auto isolate count (readBatchAsync)', () async {
+      final paths = [
+        'test/assets/01 TempleOS Hymn Risen (Remix).mp3',
+        'test/assets/01 TempleOS Hymn Risen (Remix).flac',
+        'test/assets/01 TempleOS Hymn Risen (Remix).wav',
+      ];
+      final results = await TagLibFile.readBatchAsync(
+        paths,
+        isolateCount: 0, // Auto CPU cores
+      );
+      expect(results.length, equals(3));
+      expect(results[0].title, equals('TempleOS Hymn Risen (Remix)'));
+      expect(results[1].title, equals('TempleOS Hymn Risen (Remix)'));
+      expect(results[2].title, equals('TempleOS Hymn Risen (Remix)'));
+    });
   });
 }

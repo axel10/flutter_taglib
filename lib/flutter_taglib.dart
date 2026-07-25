@@ -431,12 +431,13 @@ class TagLibFile {
   /// Batch reads metadata for a list of file paths across multiple worker Isolates concurrently.
   ///
   /// [filePaths]: List of file paths to process.
-  /// [isolateCount]: Number of parallel Isolates to spawn (defaults to 4).
+  /// [isolateCount]: Number of parallel Isolates to spawn. Defaults to 0 (Auto),
+  /// which automatically matches [Platform.numberOfProcessors].
   /// [audioPropertiesStyle]: TagLib audio properties reading style.
   /// [onProgress]: Optional progress callback reported as (processedCount, totalCount).
   static Future<List<BatchTagMetadata>> readBatchAsync(
     List<String> filePaths, {
-    int isolateCount = 4,
+    int isolateCount = 0,
     TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
     void Function(int processedCount, int totalCount)? onProgress,
   }) async {
@@ -451,7 +452,9 @@ class TagLibFile {
       );
     }
 
-    final effectiveIsolates = isolateCount.clamp(1, filePaths.length);
+    final targetIsolates =
+        (isolateCount <= 0) ? Platform.numberOfProcessors : isolateCount;
+    final effectiveIsolates = targetIsolates.clamp(1, filePaths.length);
     final chunkSize = (filePaths.length / effectiveIsolates).ceil();
 
     final receivePort = ReceivePort();

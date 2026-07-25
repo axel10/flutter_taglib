@@ -101,7 +101,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   double _benchmarkProgress = 0.0;
   String? _benchmarkCurrentFile;
   int _benchmarkIterations = 1000;
-  int _benchmarkIsolateCount = 8;
+  int _benchmarkIsolateCount = 0;
   TagLibAudioPropertiesStyle _benchmarkAudioPropertiesStyle =
       TagLibAudioPropertiesStyle.average;
   final _mockFileCountController = TextEditingController(text: '50');
@@ -889,7 +889,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       debugPrint('''
 ========== [SCAN BENCHMARK DIAGNOSTICS] ==========
 Scan Mode: $scanModeLabel
-Isolates Count: $_benchmarkIsolateCount
+Isolates Count: ${_benchmarkIsolateCount == 0 ? 'Auto (${Platform.numberOfProcessors} Cores)' : _benchmarkIsolateCount}
 Audio Properties Mode: ${_benchmarkAudioPropertiesStyle.name}
 Target Directory: $dirPath
 Total Files Found: $totalFiles
@@ -2093,10 +2093,13 @@ Total Files Found: $totalFiles
                                     vertical: 12,
                                   ),
                                 ),
-                                items: [1, 2, 4, 8, 16].map((count) {
+                                items: [0, 1, 2, 4, 8, 16].map((count) {
+                                  final label = count == 0
+                                      ? 'Auto (${Platform.numberOfProcessors}核)'
+                                      : '$count Isolates';
                                   return DropdownMenuItem<int>(
                                     value: count,
-                                    child: Text('$count Isolates'),
+                                    child: Text(label),
                                   );
                                 }).toList(),
                                 onChanged: _isBenchmarking
