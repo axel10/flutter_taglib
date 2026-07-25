@@ -40,3 +40,4 @@ kotlin-compiler-*.salive
 
 benchmark_music_library/*
 benchmark_library/*
+.flutter_taglib_build_android_from_source
