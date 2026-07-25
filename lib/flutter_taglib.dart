@@ -80,6 +80,7 @@ class BatchTagMetadata {
     required this.sampleRate,
     required this.channels,
     required this.hasCover,
+    this.coverData,
     required this.success,
     this.error,
   });
@@ -97,6 +98,7 @@ class BatchTagMetadata {
   final int sampleRate;
   final int channels;
   final bool hasCover;
+  final Uint8List? coverData;
   final bool success;
   final String? error;
 }
@@ -492,13 +494,13 @@ class TagLibFile {
   ///
   /// [filePaths]: List of file paths to process.
   /// [isolateCount]: Number of parallel Isolates to spawn. Defaults to 0 (Auto),
-  /// which automatically matches [Platform.numberOfProcessors].
-  /// [audioPropertiesStyle]: TagLib audio properties reading style.
-  /// [onProgress]: Optional progress callback reported as (processedCount, totalCount).
+  /// [readCover]: Whether to extract embedded cover art image bytes (`coverData`).
+  /// Defaults to `false` for maximum scanning performance.
   static Future<List<BatchTagMetadata>> readBatchAsync(
     List<String> filePaths, {
     int isolateCount = 0,
     TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
+    bool readCover = false,
     void Function(int processedCount, int totalCount)? onProgress,
   }) async {
     if (filePaths.isEmpty) return [];
@@ -541,6 +543,7 @@ class TagLibFile {
         workerId: i,
         paths: chunk,
         audioPropertiesStyleValue: audioPropertiesStyle.value,
+        readCover: readCover,
       );
 
       try {
@@ -550,7 +553,11 @@ class TagLibFile {
         activeWorkers.remove(i);
         final fallbackResults = <Map<String, dynamic>>[];
         for (final p in chunk) {
-          final item = _readSingleFileMetadataMap(p, audioPropertiesStyle.value);
+          final item = _readSingleFileMetadataMap(
+            p,
+            audioPropertiesStyle.value,
+            readCover,
+          );
           fallbackResults.add(item);
         }
         workerResults[i] = fallbackResults;
@@ -614,6 +621,7 @@ class TagLibFile {
             sampleRate: (item['sampleRate'] as int?) ?? 0,
             channels: (item['channels'] as int?) ?? 0,
             hasCover: item['hasCover'] == true,
+            coverData: item['coverData'] as Uint8List?,
             success: item['success'] == true,
             error: item['error'] as String?,
           ),
@@ -1473,16 +1481,22 @@ class _TagLibBatchWorkerParams {
   final int workerId;
   final List<String> paths;
   final int audioPropertiesStyleValue;
+  final bool readCover;
 
   _TagLibBatchWorkerParams({
     required this.sendPort,
     required this.workerId,
     required this.paths,
     required this.audioPropertiesStyleValue,
+    required this.readCover,
   });
 }
 
-Map<String, dynamic> _readSingleFileMetadataMap(String filePath, int styleValue) {
+Map<String, dynamic> _readSingleFileMetadataMap(
+  String filePath,
+  int styleValue,
+  bool readCover,
+) {
   final pathPtr = filePath.toNativeUtf8();
   try {
     final handle = bindings.taglib_bridge_open_with_style(
@@ -1513,6 +1527,26 @@ Map<String, dynamic> _readSingleFileMetadataMap(String filePath, int styleValue)
       final channels = bindings.taglib_bridge_get_channels(handle);
       final hasCover = bindings.taglib_bridge_has_cover(handle) != 0;
 
+      Uint8List? coverData;
+      if (readCover && hasCover) {
+        final size = bindings.taglib_bridge_front_cover_size(handle);
+        if (size > 0) {
+          final buffer = malloc<ffi.Uint8>(size);
+          try {
+            final copied = bindings.taglib_bridge_front_cover_data(
+              handle,
+              buffer,
+              size,
+            );
+            if (copied == 1) {
+              coverData = Uint8List.fromList(buffer.asTypedList(size));
+            }
+          } finally {
+            malloc.free(buffer);
+          }
+        }
+      }
+
       bindings.taglib_bridge_close(handle);
 
       return {
@@ -1529,6 +1563,7 @@ Map<String, dynamic> _readSingleFileMetadataMap(String filePath, int styleValue)
         'sampleRate': sampleRate,
         'channels': channels,
         'hasCover': hasCover,
+        'coverData': coverData,
         'success': true,
       };
     } else {
@@ -1552,10 +1587,11 @@ void _tagLibBatchWorkerEntryPoint(_TagLibBatchWorkerParams params) {
   final sendPort = params.sendPort;
   final paths = params.paths;
   final styleValue = params.audioPropertiesStyleValue;
+  final readCover = params.readCover;
   final results = <Map<String, dynamic>>[];
 
   for (int i = 0; i < paths.length; i++) {
-    final item = _readSingleFileMetadataMap(paths[i], styleValue);
+    final item = _readSingleFileMetadataMap(paths[i], styleValue, readCover);
     results.add(item);
 
     if ((i + 1) % 10 == 0 || i == paths.length - 1) {

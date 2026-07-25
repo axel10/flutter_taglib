@@ -488,5 +488,24 @@ void main() {
       expect(results[1].title, equals('TempleOS Hymn Risen (Remix)'));
       expect(results[2].title, equals('TempleOS Hymn Risen (Remix)'));
     });
+
+    test('Batch read with readCover enabled (readBatchAsync)', () async {
+      final paths = [
+        'test/assets/01 TempleOS Hymn Risen (Remix).mp3',
+        'test/assets/01 TempleOS Hymn Risen (Remix).flac',
+      ];
+      final results = await TagLibFile.readBatchAsync(
+        paths,
+        readCover: true,
+      );
+      expect(results.length, equals(2));
+      for (final res in results) {
+        expect(res.success, isTrue);
+        if (res.hasCover) {
+          expect(res.coverData, isNotNull);
+          expect(res.coverData!.isNotEmpty, isTrue);
+        }
+      }
+    });
   });
 }
