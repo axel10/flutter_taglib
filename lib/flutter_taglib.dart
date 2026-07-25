@@ -186,6 +186,55 @@ class TagLibFile {
     }
   }
 
+  /// Recursively lists supported audio files in a SAF directory or SAF tree URI on Android.
+  /// Returns a list of document `content://` URIs.
+  static Future<List<String>> listSafDirectory(String uri) async {
+    if (!Platform.isAndroid) return [];
+    if (!isSupported) return [];
+    try {
+      final List<dynamic>? result = await _channel.invokeMethod<List<dynamic>>(
+        'listSafDirectory',
+        {'uri': uri},
+      );
+      return result?.cast<String>() ?? <String>[];
+    } catch (e) {
+      _logger.warning('listSafDirectory failed: $e');
+      lastError = 'listSafDirectory failed: $e';
+      return <String>[];
+    }
+  }
+
+  /// Requests storage / media permissions on Android.
+  /// Returns `true` if storage permission is granted.
+  static Future<bool> requestStoragePermission() async {
+    if (!Platform.isAndroid) return true;
+    if (!isSupported) return false;
+    try {
+      final bool? granted = await _channel.invokeMethod<bool>(
+        'requestStoragePermission',
+      );
+      return granted ?? false;
+    } catch (e) {
+      _logger.warning('requestStoragePermission failed: $e');
+      return false;
+    }
+  }
+
+  /// Checks if storage / media permission is granted on Android.
+  static Future<bool> checkStoragePermission() async {
+    if (!Platform.isAndroid) return true;
+    if (!isSupported) return false;
+    try {
+      final bool? granted = await _channel.invokeMethod<bool>(
+        'checkStoragePermission',
+      );
+      return granted ?? false;
+    } catch (e) {
+      _logger.warning('checkStoragePermission failed: $e');
+      return false;
+    }
+  }
+
   ffi.Pointer<bindings.TagLibBridgeFile> _handle;
 
   /// The filesystem path or content URI of the opened audio file.

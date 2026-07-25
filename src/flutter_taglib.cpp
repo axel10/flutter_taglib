@@ -67,6 +67,13 @@
 static JavaVM* g_vm = nullptr;
 static jobject g_context = nullptr;
 
+#ifdef __ANDROID__
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_vm = vm;
+    return JNI_VERSION_1_6;
+}
+#endif
+
 static JNIEnv* get_jni_env() {
     if (!g_vm) return nullptr;
     JNIEnv* env = nullptr;

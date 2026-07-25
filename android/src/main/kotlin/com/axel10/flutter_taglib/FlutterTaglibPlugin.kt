@@ -24,17 +24,19 @@ import io.flutter.plugin.common.PluginRegistry
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, PluginRegistry.ActivityResultListener {
+class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, PluginRegistry.ActivityResultListener, PluginRegistry.RequestPermissionsResultListener {
     private var channel: MethodChannel? = null
     private var context: Context? = null
     private var activity: Activity? = null
     private var pendingResult: Result? = null
+    private var pendingPermissionResult: Result? = null
     private var resolvedUriString: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
         private const val TAG = "FlutterTaglibPlugin"
         private const val REQUEST_WRITE_PERMISSION = 1045
+        private const val REQUEST_STORAGE_PERMISSION = 1046
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -80,6 +82,20 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
             }
             Log.d(TAG, "onMethodCall openFileDescriptor: uri=$uriStr mode=$mode")
             handleOpenFileDescriptor(uriStr, mode, result)
+        } else if (call.method == "listSafDirectory") {
+            val uriStr = call.argument<String>("uri")
+            if (uriStr == null) {
+                result.error("INVALID_ARGUMENT", "URI is null", null)
+                return
+            }
+            Log.d(TAG, "onMethodCall listSafDirectory: uri=$uriStr")
+            handleListSafDirectory(uriStr, result)
+        } else if (call.method == "requestStoragePermission") {
+            Log.d(TAG, "onMethodCall requestStoragePermission")
+            handleRequestStoragePermission(result)
+        } else if (call.method == "checkStoragePermission") {
+            Log.d(TAG, "onMethodCall checkStoragePermission")
+            result.success(isStoragePermissionGranted())
         } else {
             result.notImplemented()
         }
@@ -286,31 +302,33 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
 
         var targetUri = Uri.parse(uriStr)
         if (!uriStr.startsWith("content://") && !uriStr.startsWith("http://") && !uriStr.startsWith("https://")) {
+            // 1. Try direct File descriptor open first if the file exists and is readable via standard permissions
+            val filePath = if (uriStr.startsWith("file://")) Uri.parse(uriStr).path else uriStr
+            if (filePath != null) {
+                val file = java.io.File(filePath)
+                if (file.exists() && file.canRead()) {
+                    try {
+                        val pfdMode = when (mode) {
+                            "r" -> android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                            "w" -> android.os.ParcelFileDescriptor.MODE_WRITE_ONLY
+                            "rw" -> android.os.ParcelFileDescriptor.MODE_READ_WRITE
+                            else -> android.os.ParcelFileDescriptor.MODE_READ_ONLY
+                        }
+                        val pfd = android.os.ParcelFileDescriptor.open(file, pfdMode)
+                        val fd = pfd.detachFd()
+                        Log.d(TAG, "handleOpenFileDescriptor: opened fd=$fd via direct File for $uriStr")
+                        result.success(fd)
+                        return
+                    } catch (e: Exception) {
+                        Log.w(TAG, "handleOpenFileDescriptor: File direct open failed for $uriStr: ${e.message}")
+                    }
+                }
+            }
+
+            // 2. If direct File open failed, try resolving registered SAF tree mapping
             val safUri = resolvePhysicalPathToSafUri(safeContext, uriStr)
             if (safUri != null) {
                 targetUri = safUri
-            } else {
-                val filePath = if (uriStr.startsWith("file://")) Uri.parse(uriStr).path else uriStr
-                if (filePath != null) {
-                    val file = java.io.File(filePath)
-                    if (file.exists() && file.canRead()) {
-                        try {
-                            val pfdMode = when (mode) {
-                                "r" -> android.os.ParcelFileDescriptor.MODE_READ_ONLY
-                                "w" -> android.os.ParcelFileDescriptor.MODE_WRITE_ONLY
-                                "rw" -> android.os.ParcelFileDescriptor.MODE_READ_WRITE
-                                else -> android.os.ParcelFileDescriptor.MODE_READ_ONLY
-                            }
-                            val pfd = android.os.ParcelFileDescriptor.open(file, pfdMode)
-                            val fd = pfd.detachFd()
-                            Log.d(TAG, "handleOpenFileDescriptor: opened fd=$fd via direct File for $uriStr")
-                            result.success(fd)
-                            return
-                        } catch (e: Exception) {
-                            Log.w(TAG, "handleOpenFileDescriptor: File direct open failed for $uriStr: ${e.message}")
-                        }
-                    }
-                }
             }
         }
         Log.d(TAG, "handleOpenFileDescriptor: targetUri=$targetUri mode=$mode")
@@ -343,40 +361,43 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
     private fun resolvePhysicalPathToSafUri(context: Context, physicalPath: String): Uri? {
         try {
             val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-            val mappingsJson = prefs.getString("flutter.saf_tree_mappings_v1", null) ?: return null
-            val mappings = JSONObject(mappingsJson)
-            
-            val normalizedFile = java.io.File(physicalPath).absolutePath.lowercase()
-            var bestRoot: String? = null
-            var bestTreeUriStr: String? = null
-            
-            val keys = mappings.keys()
-            while (keys.hasNext()) {
-                val rootPath = keys.next()
-                val normalizedRoot = java.io.File(rootPath).absolutePath.lowercase()
-                if (normalizedFile.startsWith(normalizedRoot)) {
-                    if (bestRoot == null || rootPath.length > bestRoot.length) {
-                        bestRoot = rootPath
-                        bestTreeUriStr = mappings.getString(rootPath)
+            val mappingsJson = prefs.getString("flutter.saf_tree_mappings_v1", null)
+            if (mappingsJson != null) {
+                val mappings = JSONObject(mappingsJson)
+                val normalizedFile = java.io.File(physicalPath).absolutePath.lowercase()
+                var bestRoot: String? = null
+                var bestTreeUriStr: String? = null
+                
+                val keys = mappings.keys()
+                while (keys.hasNext()) {
+                    val rootPath = keys.next()
+                    val normalizedRoot = java.io.File(rootPath).absolutePath.lowercase()
+                    if (normalizedFile.startsWith(normalizedRoot)) {
+                        if (bestRoot == null || rootPath.length > bestRoot.length) {
+                            bestRoot = rootPath
+                            bestTreeUriStr = mappings.getString(rootPath)
+                        }
                     }
                 }
+                
+                if (bestRoot != null && bestTreeUriStr != null) {
+                    val relativePath = physicalPath.substring(bestRoot.length).trimStart('/', '\\')
+                    val normalizedRelativePath = relativePath.replace('\\', '/')
+                    
+                    val treeUri = Uri.parse(bestTreeUriStr)
+                    val treeId = DocumentsContract.getTreeDocumentId(treeUri)
+                    
+                    val childDocumentId = if (normalizedRelativePath.isEmpty()) {
+                        treeId
+                    } else {
+                        "$treeId/$normalizedRelativePath"
+                    }
+                    
+                    return DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocumentId)
+                }
             }
-            
-            if (bestRoot == null || bestTreeUriStr == null) return null
-            
-            val relativePath = physicalPath.substring(bestRoot.length).trimStart('/', '\\')
-            val normalizedRelativePath = relativePath.replace('\\', '/')
-            
-            val treeUri = Uri.parse(bestTreeUriStr)
-            val treeId = DocumentsContract.getTreeDocumentId(treeUri)
-            
-            val childDocumentId = if (normalizedRelativePath.isEmpty()) {
-                treeId
-            } else {
-                "$treeId/$normalizedRelativePath"
-            }
-            
-            return DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocumentId)
+
+            return null
         } catch (e: Exception) {
             Log.e(TAG, "Error resolving path to SAF URI: ${e.message}", e)
             return null
@@ -538,6 +559,7 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activity = binding.activity
         binding.addActivityResultListener(this)
+        binding.addRequestPermissionsResultListener(this)
         Log.d(TAG, "onAttachedToActivity: Activity attached")
     }
 
@@ -549,12 +571,187 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
         activity = binding.activity
         binding.addActivityResultListener(this)
+        binding.addRequestPermissionsResultListener(this)
         Log.d(TAG, "onReattachedToActivityForConfigChanges")
     }
 
     override fun onDetachedFromActivity() {
         activity = null
         Log.d(TAG, "onDetachedFromActivity: Activity detached")
+    }
+
+    private fun handleListSafDirectory(uriStr: String, result: Result) {
+        val safeContext = context ?: run {
+            mainHandler.post { result.error("INTERNAL_ERROR", "Context is null", null) }
+            return
+        }
+
+        Thread {
+            try {
+                var treeUri: Uri? = null
+                if (uriStr.startsWith("content://")) {
+                    treeUri = Uri.parse(uriStr)
+                } else {
+                    treeUri = resolvePhysicalPathToSafUri(safeContext, uriStr)
+                    if (treeUri == null && uriStr.startsWith("/tree/")) {
+                        treeUri = Uri.parse("content://com.android.externalstorage.documents" + uriStr)
+                    }
+                }
+
+                val audioUris = mutableListOf<String>()
+
+                if (treeUri != null) {
+                    val treeDocumentId = if (DocumentsContract.isTreeUri(treeUri)) {
+                        DocumentsContract.getTreeDocumentId(treeUri)
+                    } else if (DocumentsContract.isDocumentUri(safeContext, treeUri)) {
+                        DocumentsContract.getDocumentId(treeUri)
+                    } else {
+                        treeUri.lastPathSegment ?: ""
+                    }
+
+                    scanSafTreeRecursively(safeContext, treeUri, treeDocumentId, audioUris)
+                } else {
+                    // Fallback for physical File directory scan when SAF tree URI is not mapped
+                    val file = java.io.File(uriStr)
+                    if (file.exists() && file.isDirectory) {
+                        scanPhysicalDirectoryRecursively(file, audioUris)
+                    } else {
+                        mainHandler.post {
+                            result.error("INVALID_URI", "Cannot resolve SAF tree URI or physical directory for: $uriStr", null)
+                        }
+                        return@Thread
+                    }
+                }
+
+                mainHandler.post {
+                    result.success(audioUris)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "handleListSafDirectory error: ${e.message}", e)
+                mainHandler.post {
+                    result.error("LIST_FAILED", "Failed to list SAF directory: ${e.message}", null)
+                }
+            }
+        }.start()
+    }
+
+    private fun scanPhysicalDirectoryRecursively(dir: java.io.File, audioUris: MutableList<String>) {
+        val supportedExtensions = setOf(
+            "mp3", "flac", "m4a", "aac", "ogg", "wav",
+            "aiff", "ape", "mpc", "wv", "tta", "wma", "opus", "spx"
+        )
+        val files = dir.listFiles() ?: return
+        for (file in files) {
+            if (file.isDirectory) {
+                scanPhysicalDirectoryRecursively(file, audioUris)
+            } else if (file.isFile) {
+                val ext = file.extension.lowercase()
+                if (supportedExtensions.contains(ext)) {
+                    audioUris.add(file.absolutePath)
+                }
+            }
+        }
+    }
+
+    private fun scanSafTreeRecursively(
+        context: Context,
+        treeUri: Uri,
+        parentDocId: String,
+        audioUris: MutableList<String>
+    ) {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME
+        )
+        val supportedExtensions = setOf(
+            "mp3", "flac", "m4a", "aac", "ogg", "wav",
+            "aiff", "ape", "mpc", "wv", "tta", "wma", "opus", "spx"
+        )
+
+        try {
+            context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+                val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+
+                while (cursor.moveToNext()) {
+                    val docId = if (idIdx != -1) cursor.getString(idIdx) else null ?: continue
+                    val mimeType = if (mimeIdx != -1) cursor.getString(mimeIdx) else null
+                    val name = if (nameIdx != -1) cursor.getString(nameIdx) else ""
+
+                    if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        scanSafTreeRecursively(context, treeUri, docId, audioUris)
+                    } else {
+                        val ext = name.substringAfterLast('.', "").lowercase()
+                        if (mimeType?.startsWith("audio/") == true || supportedExtensions.contains(ext)) {
+                            val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
+                            audioUris.add(docUri.toString())
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "scanSafTreeRecursively failed for parentDocId $parentDocId: ${e.message}")
+        }
+    }
+
+    private fun isStoragePermissionGranted(): Boolean {
+        val safeContext = context ?: activity ?: return false
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            safeContext.checkSelfPermission(android.Manifest.permission.READ_MEDIA_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            safeContext.checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } else {
+            true
+        }
+    }
+
+    private fun handleRequestStoragePermission(result: Result) {
+        if (isStoragePermissionGranted()) {
+            result.success(true)
+            return
+        }
+
+        val safeActivity = activity
+        if (safeActivity == null) {
+            result.success(false)
+            return
+        }
+
+        pendingPermissionResult = result
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            safeActivity.requestPermissions(
+                arrayOf(android.Manifest.permission.READ_MEDIA_AUDIO),
+                REQUEST_STORAGE_PERMISSION
+            )
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            safeActivity.requestPermissions(
+                arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE),
+                REQUEST_STORAGE_PERMISSION
+            )
+        } else {
+            result.success(true)
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ): Boolean {
+        if (requestCode == REQUEST_STORAGE_PERMISSION) {
+            val res = pendingPermissionResult
+            pendingPermissionResult = null
+            if (res != null) {
+                val granted = grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+                Log.d(TAG, "onRequestPermissionsResult: REQUEST_STORAGE_PERMISSION granted=$granted")
+                res.success(granted)
+                return true
+            }
+        }
+        return false
     }
 
 }
