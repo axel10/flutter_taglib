@@ -2,8 +2,9 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:ffi' as ffi;
-import 'dart:io' show Platform;
+import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -517,6 +518,28 @@ class TagLibFile {
       );
     }
 
+    Map<String, String>? safUriMap;
+    if (Platform.isAndroid && filePaths.isNotEmpty) {
+      bool isPosixReadable = true;
+      final samplePath = filePaths.firstWhere(
+        (p) => !p.startsWith('content://'),
+        orElse: () => '',
+      );
+      if (samplePath.isNotEmpty) {
+        try {
+          final f = File(samplePath);
+          final raf = f.openSync(mode: FileMode.read);
+          raf.closeSync();
+          isPosixReadable = true;
+        } catch (_) {
+          isPosixReadable = false;
+        }
+      }
+      if (!isPosixReadable) {
+        safUriMap = await _resolveAndroidSafTreeMappings(filePaths);
+      }
+    }
+
     final targetIsolates =
         (isolateCount <= 0) ? Platform.numberOfProcessors : isolateCount;
     final effectiveIsolates = targetIsolates.clamp(1, filePaths.length);
@@ -544,6 +567,7 @@ class TagLibFile {
         paths: chunk,
         audioPropertiesStyleValue: audioPropertiesStyle.value,
         readCover: readCover,
+        safUriMap: safUriMap,
       );
 
       try {
@@ -557,6 +581,7 @@ class TagLibFile {
             p,
             audioPropertiesStyle.value,
             readCover,
+            safUriMap?[p],
           );
           fallbackResults.add(item);
         }
@@ -596,6 +621,54 @@ class TagLibFile {
     });
 
     return completer.future;
+  }
+
+  static Future<Map<String, String>> _resolveAndroidSafTreeMappings(
+    List<String> filePaths,
+  ) async {
+    final result = <String, String>{};
+    if (!Platform.isAndroid) return result;
+    try {
+      final jsonStr = await _channel.invokeMethod<String>('getSafTreeMappings');
+      if (jsonStr != null && jsonStr.isNotEmpty) {
+        final Map<String, dynamic> rawMap = json.decode(jsonStr) as Map<String, dynamic>;
+        for (final filePath in filePaths) {
+          if (filePath.startsWith('content://')) continue;
+          final normalizedFile = filePath.replaceAll('\\', '/').toLowerCase();
+          String? bestRoot;
+          String? bestTreeUriStr;
+          for (final rootPath in rawMap.keys) {
+            final normalizedRoot = rootPath.replaceAll('\\', '/').toLowerCase();
+            if (normalizedFile.startsWith(normalizedRoot)) {
+              if (bestRoot == null || rootPath.length > bestRoot.length) {
+                bestRoot = rootPath;
+                bestTreeUriStr = rawMap[rootPath] as String?;
+              }
+            }
+          }
+          if (bestRoot != null && bestTreeUriStr != null) {
+            final relativePath = filePath.substring(bestRoot.length).replaceAll('\\', '/').replaceAll(RegExp(r'^/+'), '');
+            final treeUri = Uri.parse(bestTreeUriStr);
+            final treeId = Uri.decodeComponent(treeUri.pathSegments.last);
+            final childDocId = relativePath.isEmpty ? treeId : '$treeId/$relativePath';
+            final documentUri = Uri(
+              scheme: 'content',
+              host: treeUri.host,
+              pathSegments: [
+                'tree',
+                treeUri.pathSegments.last,
+                'document',
+                childDocId,
+              ],
+            ).toString();
+            result[filePath] = documentUri;
+          }
+        }
+      }
+    } catch (e) {
+      _logger.warning('Failed to resolve SAF tree mappings: $e');
+    }
+    return result;
   }
 
   static List<BatchTagMetadata> _buildCombinedBatchResults(
@@ -1482,6 +1555,7 @@ class _TagLibBatchWorkerParams {
   final List<String> paths;
   final int audioPropertiesStyleValue;
   final bool readCover;
+  final Map<String, String>? safUriMap;
 
   _TagLibBatchWorkerParams({
     required this.sendPort,
@@ -1489,15 +1563,18 @@ class _TagLibBatchWorkerParams {
     required this.paths,
     required this.audioPropertiesStyleValue,
     required this.readCover,
+    this.safUriMap,
   });
 }
 
 Map<String, dynamic> _readSingleFileMetadataMap(
   String filePath,
   int styleValue,
-  bool readCover,
-) {
-  final pathPtr = filePath.toNativeUtf8();
+  bool readCover, [
+  String? targetUri,
+]) {
+  final openPath = targetUri ?? filePath;
+  final pathPtr = openPath.toNativeUtf8();
   try {
     final handle = bindings.taglib_bridge_open_with_style(
       pathPtr.cast<ffi.Char>(),
@@ -1588,10 +1665,17 @@ void _tagLibBatchWorkerEntryPoint(_TagLibBatchWorkerParams params) {
   final paths = params.paths;
   final styleValue = params.audioPropertiesStyleValue;
   final readCover = params.readCover;
+  final safUriMap = params.safUriMap;
   final results = <Map<String, dynamic>>[];
 
   for (int i = 0; i < paths.length; i++) {
-    final item = _readSingleFileMetadataMap(paths[i], styleValue, readCover);
+    final path = paths[i];
+    final item = _readSingleFileMetadataMap(
+      path,
+      styleValue,
+      readCover,
+      safUriMap?[path],
+    );
     results.add(item);
 
     if ((i + 1) % 10 == 0 || i == paths.length - 1) {

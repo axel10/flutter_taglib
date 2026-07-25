@@ -250,6 +250,15 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
             } else {
                 result.success(false)
             }
+        } else if (call.method == "getSafTreeMappings") {
+            val safeContext = context ?: activity
+            if (safeContext != null) {
+                val prefs = safeContext.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                val mappingsJson = prefs.getString("flutter.saf_tree_mappings_v1", null)
+                result.success(mappingsJson)
+            } else {
+                result.success(null)
+            }
         } else if (call.method == "requestStoragePermission") {
             Log.d(TAG, "onMethodCall requestStoragePermission")
             handleRequestStoragePermission(result)
