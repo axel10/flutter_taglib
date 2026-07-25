@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -94,10 +95,15 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   bool _coverChanged = false;
 
   // Benchmark state
+  int _benchmarkModeIndex = 0; // 0 = Single File, 1 = Directory Scan
   bool _isBenchmarking = false;
+  bool _isGeneratingMockLibrary = false;
   double _benchmarkProgress = 0.0;
+  String? _benchmarkCurrentFile;
   int _benchmarkIterations = 1000;
+  final _mockFileCountController = TextEditingController(text: '50');
   _BenchmarkResult? _benchmarkResult;
+  _DirectoryBenchmarkResult? _dirBenchmarkResult;
 
   @override
   void initState() {
@@ -116,6 +122,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
     genreController.dispose();
     yearController.dispose();
     trackController.dispose();
+    _mockFileCountController.dispose();
     super.dispose();
   }
 
@@ -643,6 +650,304 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       await _loadFile(filePath, name: fileName, pickedAudioFile: pickedFile);
       if (mounted) {
         setState(() {
+          _isBenchmarking = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _runDirectoryBenchmark([String? preSelectedDir]) async {
+    String? dirPath = preSelectedDir;
+    if (dirPath == null) {
+      try {
+        dirPath = await FilePicker.getDirectoryPath();
+      } catch (e) {
+        debugPrint('Directory pick error: $e');
+      }
+    }
+
+    if (dirPath == null || dirPath.isEmpty) return;
+
+    final dir = Directory(dirPath);
+    if (!dir.existsSync()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Selected directory does not exist: $dirPath')),
+      );
+      return;
+    }
+
+    final currentFilePath = _filePath ?? _tagLibFile?.path;
+    final currentFileName = _fileName;
+    final currentPickedFile = _pickedAudioFile;
+
+    // Temporarily close UI file handle so Windows OS file locks don't interfere
+    _tagLibFile?.close();
+    _tagLibFile = null;
+
+    setState(() {
+      _isBenchmarking = true;
+      _benchmarkProgress = 0.0;
+      _benchmarkCurrentFile = 'Scanning folder structure...';
+      _dirBenchmarkResult = null;
+    });
+
+    try {
+      final supportedExtensions = {
+        'mp3',
+        'flac',
+        'm4a',
+        'aac',
+        'ogg',
+        'wav',
+        'aiff',
+        'ape',
+        'mpc',
+        'wv',
+        'tta',
+        'wma',
+        'opus',
+        'spx',
+      };
+
+      final audioFiles = <File>[];
+      await for (final entity in dir.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is File) {
+          final ext = entity.path.split('.').last.toLowerCase();
+          if (supportedExtensions.contains(ext)) {
+            audioFiles.add(entity);
+          }
+        }
+      }
+
+      if (audioFiles.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No supported audio files found in: $dirPath'),
+          ),
+        );
+        return;
+      }
+
+      final totalFiles = audioFiles.length;
+      int successCount = 0;
+      int failCount = 0;
+      final formatBreakdown = <String, int>{};
+
+      final stopwatch = Stopwatch()..start();
+
+      for (int i = 0; i < totalFiles; i++) {
+        final file = audioFiles[i];
+        final ext = file.path.split('.').last.toUpperCase();
+        formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
+
+        final f = TagLibFile.open(file.path);
+        if (f != null) {
+          final _ = f.title;
+          final _ = f.artist;
+          final _ = f.album;
+          final _ = f.genre;
+          final _ = f.comment;
+          final _ = f.year;
+          final _ = f.track;
+          final _ = f.duration;
+          final _ = f.bitrate;
+          final _ = f.sampleRate;
+          final _ = f.channels;
+          final _ = f.hasCover;
+          f.close();
+          successCount++;
+        } else {
+          failCount++;
+        }
+
+        if (i % 5 == 0 || i == totalFiles - 1) {
+          if (!mounted) return;
+          setState(() {
+            _benchmarkProgress = (i + 1) / totalFiles;
+            _benchmarkCurrentFile =
+                file.path.split(Platform.pathSeparator).last;
+          });
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+
+      stopwatch.stop();
+
+      final totalMs = stopwatch.elapsedMilliseconds;
+      final avgMs = totalFiles > 0 ? totalMs / totalFiles : 0.0;
+      final opsPerSec = stopwatch.elapsedMicroseconds > 0
+          ? (totalFiles / (stopwatch.elapsedMicroseconds / 1000000.0))
+          : 0.0;
+
+      if (!mounted) return;
+
+      setState(() {
+        _dirBenchmarkResult = _DirectoryBenchmarkResult(
+          directoryPath: dirPath!,
+          totalFilesFound: totalFiles,
+          successCount: successCount,
+          failCount: failCount,
+          totalMs: totalMs,
+          avgMsPerFile: avgMs,
+          opsPerSec: opsPerSec,
+          formatBreakdown: formatBreakdown,
+        );
+      });
+    } catch (e) {
+      debugPrint('Directory benchmark error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Directory benchmark failed: $e')));
+      }
+    } finally {
+      if (currentFilePath != null) {
+        await _loadFile(
+          currentFilePath,
+          name: currentFileName,
+          pickedAudioFile: currentPickedFile,
+        );
+      }
+      if (mounted) {
+        setState(() {
+          _isBenchmarking = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _generateAndScanMockLibrary() async {
+    final count = int.tryParse(_mockFileCountController.text) ?? 50;
+    if (count <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a valid song count (> 0).')),
+      );
+      return;
+    }
+
+    setState(() {
+      _isGeneratingMockLibrary = true;
+      _isBenchmarking = true;
+      _benchmarkProgress = 0.0;
+      _benchmarkCurrentFile = 'Checking ffmpeg availability...';
+    });
+
+    try {
+      final ffmpegCheck = await Process.run('ffmpeg', ['-version']);
+      if (ffmpegCheck.exitCode != 0) {
+        throw Exception('ffmpeg error');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isGeneratingMockLibrary = false;
+        _isBenchmarking = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'ffmpeg is not available in system PATH. Please install ffmpeg to generate test songs.',
+          ),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    try {
+      if (!mounted) return;
+      setState(() {
+        _benchmarkCurrentFile =
+            'Generating $count mock audio files via ffmpeg...';
+      });
+
+      final targetDirName = 'benchmark_music_library';
+      final rootDir = Directory.current.path.endsWith('example')
+          ? File(Directory.current.path).parent.path
+          : Directory.current.path;
+
+      final scriptPath =
+          '$rootDir${Platform.pathSeparator}example${Platform.pathSeparator}bin${Platform.pathSeparator}generate_benchmark_library.dart';
+
+      final process = await Process.start(
+        'dart',
+        ['run', scriptPath, '--dir=$targetDirName', '--count=$count'],
+        workingDirectory: rootDir,
+      );
+
+      final RegExp lineRegex = RegExp(r'\[(\d+)/(\d+)\] Created:\s*(.*)');
+      final stderrBuffer = StringBuffer();
+
+      process.stderr
+          .transform(utf8.decoder)
+          .listen((data) => stderrBuffer.write(data));
+
+      final stdoutLines = process.stdout
+          .transform(utf8.decoder)
+          .transform(const LineSplitter());
+
+      await for (final line in stdoutLines) {
+        final match = lineRegex.firstMatch(line);
+        if (match != null) {
+          final current = int.tryParse(match.group(1) ?? '') ?? 0;
+          final total = int.tryParse(match.group(2) ?? '') ?? count;
+          final fullPath = match.group(3) ?? '';
+          final fileName = fullPath.split('(').first.trim().split(Platform.pathSeparator).last;
+          if (mounted) {
+            setState(() {
+              _benchmarkProgress = (current / total).clamp(0.0, 1.0);
+              _benchmarkCurrentFile = '[$current/$total] Generating $fileName...';
+            });
+          }
+        } else if (line.contains('Generating cover art assets')) {
+          if (mounted) {
+            setState(() {
+              _benchmarkCurrentFile = 'Generating cover art assets...';
+            });
+          }
+        }
+      }
+
+      final exitCode = await process.exitCode;
+      if (exitCode != 0) {
+        debugPrint('Generator error output: $stderrBuffer');
+        throw Exception('Generation script failed: $stderrBuffer');
+      }
+
+      String? mockLibPath;
+      for (final p in [
+        'benchmark_music_library',
+        '../benchmark_music_library',
+        'example/benchmark_music_library',
+      ]) {
+        if (Directory(p).existsSync()) {
+          mockLibPath = p;
+          break;
+        }
+      }
+
+      if (mockLibPath != null) {
+        await _runDirectoryBenchmark(mockLibPath);
+      }
+    } catch (e) {
+      debugPrint('Generation error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to generate mock library: $e'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGeneratingMockLibrary = false;
           _isBenchmarking = false;
         });
       }
@@ -1314,7 +1619,21 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   Widget _buildBenchmarkSection() {
     if (_tagLibFile == null) return const SizedBox.shrink();
 
-    final result = _benchmarkResult;
+    // Check if generated benchmark_library exists
+    String? localMockLibPath;
+    for (final path in [
+      'benchmark_music_library',
+      '../benchmark_music_library',
+      'example/benchmark_music_library',
+    ]) {
+      if (Directory(path).existsSync()) {
+        localMockLibPath = path;
+        break;
+      }
+    }
+
+    final singleResult = _benchmarkResult;
+    final dirResult = _dirBenchmarkResult;
 
     return Card(
       elevation: 4,
@@ -1324,6 +1643,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Mode selector row
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -1341,117 +1661,404 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
                     ),
                   ],
                 ),
-                DropdownButton<int>(
-                  value: _benchmarkIterations,
-                  dropdownColor: const Color(0xFF1E293B),
-                  style: const TextStyle(color: Colors.white, fontSize: 13),
-                  underline: const SizedBox.shrink(),
-                  items: const [
-                    DropdownMenuItem(value: 100, child: Text('100 Reads')),
-                    DropdownMenuItem(value: 1000, child: Text('1,000 Reads')),
-                    DropdownMenuItem(value: 5000, child: Text('5,000 Reads')),
+                SegmentedButton<int>(
+                  segments: const [
+                    ButtonSegment(
+                      value: 0,
+                      label: Text('Single File'),
+                      icon: Icon(Icons.audio_file, size: 16),
+                    ),
+                    ButtonSegment(
+                      value: 1,
+                      label: Text('Directory Scan'),
+                      icon: Icon(Icons.folder_copy, size: 16),
+                    ),
                   ],
-                  onChanged: _isBenchmarking
+                  selected: {_benchmarkModeIndex},
+                  onSelectionChanged: _isBenchmarking
                       ? null
-                      : (val) {
-                          if (val != null) {
-                            setState(() {
-                              _benchmarkIterations = val;
-                            });
-                          }
+                      : (newSelection) {
+                          setState(() {
+                            _benchmarkModeIndex = newSelection.first;
+                          });
                         },
+                  style: const ButtonStyle(
+                    visualDensity: VisualDensity.compact,
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                 ),
               ],
             ),
             const Divider(color: Color(0xFF334155), height: 24),
-            Text(
-              'Test metadata extraction performance by opening, reading properties, and closing the audio file $_benchmarkIterations times.',
-              style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-            ),
-            const SizedBox(height: 16),
-            if (_isBenchmarking) ...[
-              LinearProgressIndicator(
-                value: _benchmarkProgress,
-                backgroundColor: const Color(0xFF334155),
-                color: const Color(0xFF6366F1),
-                minHeight: 8,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Running benchmark: ${(_benchmarkProgress * 100).toStringAsFixed(0)}% (${(_benchmarkProgress * _benchmarkIterations).toInt()} / $_benchmarkIterations)',
-                style: TextStyle(color: Colors.indigo.shade200, fontSize: 13),
-              ),
-            ] else ...[
-              ElevatedButton.icon(
-                onPressed: _runBenchmark,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF6366F1),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 20,
-                    vertical: 12,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                icon: const Icon(Icons.play_arrow, size: 20),
-                label: Text(
-                  'Run Benchmark ($_benchmarkIterations Reads)',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ),
-            ],
-            if (result != null && !_isBenchmarking) ...[
-              const SizedBox(height: 20),
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF334155)),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Benchmark Results',
+
+            if (_benchmarkModeIndex == 0) ...[
+              // Single file benchmark UI
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Repeatedly open, parse metadata, and close the current song $_benchmarkIterations times to benchmark raw single-file throughput.',
                       style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15,
-                        color: Color(0xFF10B981),
+                        color: Colors.grey.shade400,
+                        fontSize: 13,
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Row(
+                  ),
+                  const SizedBox(width: 12),
+                  DropdownButton<int>(
+                    value: _benchmarkIterations,
+                    dropdownColor: const Color(0xFF1E293B),
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    underline: const SizedBox.shrink(),
+                    items: const [
+                      DropdownMenuItem(value: 100, child: Text('100 Reads')),
+                      DropdownMenuItem(value: 1000, child: Text('1,000 Reads')),
+                      DropdownMenuItem(value: 5000, child: Text('5,000 Reads')),
+                    ],
+                    onChanged: _isBenchmarking
+                        ? null
+                        : (val) {
+                            if (val != null) {
+                              setState(() {
+                                _benchmarkIterations = val;
+                              });
+                            }
+                          },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (_isBenchmarking) ...[
+                LinearProgressIndicator(
+                  value: _benchmarkProgress,
+                  backgroundColor: const Color(0xFF334155),
+                  color: const Color(0xFF6366F1),
+                  minHeight: 8,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Running benchmark: ${(_benchmarkProgress * 100).toStringAsFixed(0)}% (${(_benchmarkProgress * _benchmarkIterations).toInt()} / $_benchmarkIterations)',
+                  style: TextStyle(
+                    color: Colors.indigo.shade200,
+                    fontSize: 13,
+                  ),
+                ),
+              ] else ...[
+                ElevatedButton.icon(
+                  onPressed: _runBenchmark,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF6366F1),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 20,
+                      vertical: 12,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  icon: const Icon(Icons.play_arrow, size: 20),
+                  label: Text(
+                    'Run Benchmark ($_benchmarkIterations Reads)',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+              if (singleResult != null && !_isBenchmarking) ...[
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF334155)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Benchmark Results (Single File)',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15,
+                          color: Color(0xFF10B981),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildMetricTile(
+                              'Total Time',
+                              '${singleResult.totalMs} ms',
+                              Icons.timer,
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildMetricTile(
+                              'Avg Time / Read',
+                              '${singleResult.avgMs.toStringAsFixed(3)} ms',
+                              Icons.av_timer,
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildMetricTile(
+                              'Throughput',
+                              '${singleResult.opsPerSec.toStringAsFixed(0)} / sec',
+                              Icons.flash_on,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ] else ...[
+              // Directory benchmark UI
+              Text(
+                'Recursively scan a directory tree containing music files of various formats (MP3, FLAC, M4A, WAV, etc.) and cover sizes.',
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+              ),
+              const SizedBox(height: 16),
+              if (_isBenchmarking) ...[
+                LinearProgressIndicator(
+                  value: _benchmarkProgress,
+                  backgroundColor: const Color(0xFF334155),
+                  color: const Color(0xFF10B981),
+                  minHeight: 8,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  'Scanning directory: ${(_benchmarkProgress * 100).toStringAsFixed(0)}% ${_benchmarkCurrentFile ?? ""}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFA7F3D0),
+                    fontSize: 13,
+                  ),
+                ),
+              ] else ...[
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 12,
+                      runSpacing: 12,
                       children: [
-                        Expanded(
-                          child: _buildMetricTile(
-                            'Total Time',
-                            '${result.totalMs} ms',
-                            Icons.timer,
+                        SizedBox(
+                          width: 140,
+                          child: TextFormField(
+                            controller: _mockFileCountController,
+                            keyboardType: TextInputType.number,
+                            enabled: !_isBenchmarking,
+                            decoration: const InputDecoration(
+                              labelText: 'Mock Songs',
+                              hintText: '50',
+                              prefixIcon: Icon(Icons.numbers, size: 18),
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 12,
+                              ),
+                            ),
                           ),
                         ),
-                        Expanded(
-                          child: _buildMetricTile(
-                            'Avg Time / Read',
-                            '${result.avgMs.toStringAsFixed(3)} ms',
-                            Icons.av_timer,
+                        ElevatedButton.icon(
+                          onPressed: _isBenchmarking
+                              ? null
+                              : _generateAndScanMockLibrary,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF6366F1),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 14,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
                           ),
-                        ),
-                        Expanded(
-                          child: _buildMetricTile(
-                            'Throughput',
-                            '${result.opsPerSec.toStringAsFixed(0)} / sec',
-                            Icons.flash_on,
+                          icon: _isGeneratingMockLibrary
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    color: Colors.white,
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.auto_mode, size: 18),
+                          label: Text(
+                            _isGeneratingMockLibrary
+                                ? 'Generating...'
+                                : 'Generate & Scan Mock Library',
                           ),
                         ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 12,
+                      runSpacing: 12,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: () => _runDirectoryBenchmark(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF10B981),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18,
+                              vertical: 12,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                          icon: const Icon(Icons.folder_open, size: 18),
+                          label: const Text(
+                            'Select Any Local Folder...',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        if (localMockLibPath != null)
+                          OutlinedButton.icon(
+                            onPressed: () =>
+                                _runDirectoryBenchmark(localMockLibPath),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: const Color(0xFF34D399),
+                              side: const BorderSide(color: Color(0xFF34D399)),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                            ),
+                            icon: const Icon(Icons.bolt, size: 18),
+                            label: const Text('Scan Existing Mock Library'),
+                          ),
+                      ],
+                    ),
                   ],
                 ),
-              ),
+              ],
+              if (dirResult != null && !_isBenchmarking) ...[
+                const SizedBox(height: 20),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF334155)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text(
+                            'Directory Scan Results',
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 15,
+                              color: Color(0xFF10B981),
+                            ),
+                          ),
+                          Text(
+                            '${dirResult.successCount} passed / ${dirResult.failCount} failed',
+                            style: TextStyle(
+                              color: Colors.grey.shade400,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        dirResult.directoryPath,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.grey.shade500,
+                          fontSize: 11,
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildMetricTile(
+                              'Total Files',
+                              '${dirResult.totalFilesFound}',
+                              Icons.library_music,
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildMetricTile(
+                              'Total Time',
+                              '${dirResult.totalMs} ms',
+                              Icons.timer,
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildMetricTile(
+                              'Avg / File',
+                              '${dirResult.avgMsPerFile.toStringAsFixed(2)} ms',
+                              Icons.av_timer,
+                            ),
+                          ),
+                          Expanded(
+                            child: _buildMetricTile(
+                              'Scan Speed',
+                              '${dirResult.opsPerSec.toStringAsFixed(0)} / sec',
+                              Icons.flash_on,
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (dirResult.formatBreakdown.isNotEmpty) ...[
+                        const Divider(color: Color(0xFF334155), height: 24),
+                        const Text(
+                          'Format Distribution:',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.grey,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: dirResult.formatBreakdown.entries.map((
+                            entry,
+                          ) {
+                            return Chip(
+                              label: Text(
+                                '${entry.key}: ${entry.value}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              backgroundColor: const Color(0xFF1E293B),
+                              side: const BorderSide(color: Color(0xFF475569)),
+                              visualDensity: VisualDensity.compact,
+                            );
+                          }).toList(),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ],
           ],
         ),
@@ -1505,5 +2112,27 @@ class _BenchmarkResult {
     required this.avgMs,
     required this.avgUs,
     required this.opsPerSec,
+  });
+}
+
+class _DirectoryBenchmarkResult {
+  final String directoryPath;
+  final int totalFilesFound;
+  final int successCount;
+  final int failCount;
+  final int totalMs;
+  final double avgMsPerFile;
+  final double opsPerSec;
+  final Map<String, int> formatBreakdown;
+
+  _DirectoryBenchmarkResult({
+    required this.directoryPath,
+    required this.totalFilesFound,
+    required this.successCount,
+    required this.failCount,
+    required this.totalMs,
+    required this.avgMsPerFile,
+    required this.opsPerSec,
+    required this.formatBreakdown,
   });
 }

@@ -37,3 +37,6 @@ migrate_working_dir/
 /taglib/
 
 kotlin-compiler-*.salive
+
+benchmark_music_library/*
+benchmark_library/*
