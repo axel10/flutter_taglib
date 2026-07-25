@@ -103,7 +103,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   int _benchmarkIterations = 1000;
   int _benchmarkIsolateCount = 8;
   TagLibAudioPropertiesStyle _benchmarkAudioPropertiesStyle =
-      TagLibAudioPropertiesStyle.fast;
+      TagLibAudioPropertiesStyle.average;
   final _mockFileCountController = TextEditingController(text: '50');
   _BenchmarkResult? _benchmarkResult;
   _DirectoryBenchmarkResult? _dirBenchmarkResult;

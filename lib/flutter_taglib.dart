@@ -302,7 +302,7 @@ class TagLibFile {
   /// Returns `null` if the file could not be opened or is invalid.
   static TagLibFile? open(
     String path, {
-    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
   }) {
     if (!isSupported) {
       throw UnsupportedError(
@@ -344,7 +344,7 @@ class TagLibFile {
   static Future<TagLibFile?> openAsync(
     String path, {
     bool writeAccess = false,
-    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
   }) async {
     lastError = null;
     if (Platform.isWindows || Platform.isLinux) {
@@ -437,7 +437,7 @@ class TagLibFile {
   static Future<List<BatchTagMetadata>> readBatchAsync(
     List<String> filePaths, {
     int isolateCount = 4,
-    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
     void Function(int processedCount, int totalCount)? onProgress,
   }) async {
     if (filePaths.isEmpty) return [];
@@ -567,7 +567,7 @@ class TagLibFile {
   static TagLibFile? openFd(
     int fd, {
     String path = '',
-    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
   }) {
     if (!isSupported) {
       throw UnsupportedError(
