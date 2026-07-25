@@ -825,121 +825,56 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
 
       final stopwatch = Stopwatch()..start();
 
-      if (!useSafScan) {
-        final batchResults = await TagLibFile.readBatchAsync(
-          audioFilePaths,
-          isolateCount: _benchmarkIsolateCount,
-          audioPropertiesStyle: _benchmarkAudioPropertiesStyle,
-          onProgress: (processed, total) {
-            if (!mounted) return;
-            setState(() {
-              _benchmarkProgress = processed / total;
-              _benchmarkCurrentFile =
-                  'Multi-Isolate Batch Scanning ($processed / $total)...';
-            });
-          },
-        );
+      final batchResults = await TagLibFile.readBatchAsync(
+        audioFilePaths,
+        isolateCount: _benchmarkIsolateCount,
+        audioPropertiesStyle: _benchmarkAudioPropertiesStyle,
+        onProgress: (processed, total) {
+          if (!mounted) return;
+          setState(() {
+            _benchmarkProgress = processed / total;
+            _benchmarkCurrentFile =
+                'Multi-Isolate Batch Scanning ($processed / $total)...';
+          });
+        },
+      );
 
-        for (final item in batchResults) {
-          final ext = item.path.split('.').last.toUpperCase();
-          formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
+      for (final item in batchResults) {
+        final ext = item.path.split('.').last.toUpperCase();
+        formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
 
-          if (item.success) {
-            successCount++;
-            if (sampleSongs.length < 10) {
-              final fileName = item.path.split(Platform.pathSeparator).last;
-              sampleSongs.add(
-                ScannedSongMetadata(
-                  path: item.path,
-                  fileName: fileName,
-                  title: item.title.trim().isEmpty ? fileName : item.title,
-                  artist: item.artist.trim().isEmpty
-                      ? 'Unknown Artist'
-                      : item.artist,
-                  album: item.album.trim().isEmpty
-                      ? 'Unknown Album'
-                      : item.album,
-                  genre: item.genre.trim().isEmpty
-                      ? 'Unknown Genre'
-                      : item.genre,
-                  year: item.year,
-                  track: item.track,
-                  duration: item.duration,
-                  bitrate: item.bitrate,
-                  sampleRate: item.sampleRate,
-                  channels: item.channels,
-                  hasCover: item.hasCover,
-                ),
-              );
-            }
-          } else {
-            failCount++;
+        if (item.success) {
+          successCount++;
+          if (sampleSongs.length < 10) {
+            final fileName = item.path.startsWith('content://')
+                ? 'SAF Document'
+                : item.path.split(Platform.pathSeparator).last;
+            sampleSongs.add(
+              ScannedSongMetadata(
+                path: item.path,
+                fileName: fileName,
+                title: item.title.trim().isEmpty ? fileName : item.title,
+                artist: item.artist.trim().isEmpty
+                    ? 'Unknown Artist'
+                    : item.artist,
+                album: item.album.trim().isEmpty
+                    ? 'Unknown Album'
+                    : item.album,
+                genre: item.genre.trim().isEmpty
+                    ? 'Unknown Genre'
+                    : item.genre,
+                year: item.year,
+                track: item.track,
+                duration: item.duration,
+                bitrate: item.bitrate,
+                sampleRate: item.sampleRate,
+                channels: item.channels,
+                hasCover: item.hasCover,
+              ),
+            );
           }
-        }
-      } else {
-        for (int i = 0; i < totalFiles; i++) {
-          final filePath = audioFilePaths[i];
-          final ext = filePath.split('.').last.toUpperCase();
-          formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
-
-          final f = await TagLibFile.openAsync(
-            filePath,
-            audioPropertiesStyle: _benchmarkAudioPropertiesStyle,
-          );
-
-          if (f != null) {
-            final title = f.title;
-            final artist = f.artist;
-            final album = f.album;
-            final genre = f.genre;
-            final _ = f.comment;
-            final year = f.year;
-            final track = f.track;
-            final duration = f.duration;
-            final bitrate = f.bitrate;
-            final sampleRate = f.sampleRate;
-            final channels = f.channels;
-            final hasCover = f.hasCover;
-
-            if (sampleSongs.length < 10) {
-              final fileName = filePath.startsWith('content://')
-                  ? 'SAF Document'
-                  : filePath.split(Platform.pathSeparator).last;
-              sampleSongs.add(
-                ScannedSongMetadata(
-                  path: filePath,
-                  fileName: fileName,
-                  title: title.trim().isEmpty ? fileName : title,
-                  artist: artist.trim().isEmpty ? 'Unknown Artist' : artist,
-                  album: album.trim().isEmpty ? 'Unknown Album' : album,
-                  genre: genre.trim().isEmpty ? 'Unknown Genre' : genre,
-                  year: year,
-                  track: track,
-                  duration: duration,
-                  bitrate: bitrate,
-                  sampleRate: sampleRate,
-                  channels: channels,
-                  hasCover: hasCover,
-                ),
-              );
-            }
-
-            f.close();
-            successCount++;
-          } else {
-            failCount++;
-          }
-
-          if (i % 20 == 0 || i == totalFiles - 1) {
-            if (!mounted) return;
-            setState(() {
-              _benchmarkProgress = (i + 1) / totalFiles;
-              _benchmarkCurrentFile = filePath
-                  .split(Platform.pathSeparator)
-                  .last;
-            });
-            await Future<void>.delayed(Duration.zero);
-          }
+        } else {
+          failCount++;
         }
       }
 
