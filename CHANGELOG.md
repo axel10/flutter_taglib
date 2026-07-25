@@ -1,10 +1,15 @@
-## Unreleased
-* Added `TagLibFile.isLossless` (and `AudioInfo.isLossless`), resolved from the encoded stream so containers such as MP4 (AAC/ALAC), WMA, WavPack and WAV/AIFF report correctly. Returns `null` when undetermined.
-* Improve `TagLibFile.coverData` performance.
-* Added `TagLibFile.format` (and `AudioInfo.format`), reporting the audio format detected from the file contents (`MP3`, `FLAC`, `OPUS`, `AAC`, `ALAC`, `AIFF`, ...), or `null` when it cannot be determined.
+## 1.5.0
+* Supports TagLib AudioPropertiesStyle settings
+* Added batch read functionality and multi-isolate support
+* Metadata read performance optimization
+* Support physical path SAF URI resolution and FD fallback
+* Added performance benchmark test to the example
 
 ## 1.4.2
-* 
+* Added `TagLibFile.format` to detect audio file formats (e.g. MP3, FLAC).
+* Added `TagLibFile.isLossless` to check if an audio file is lossless.
+* Improved `TagLibFile.coverData` for extracting cover art bytes.
+* Updated prebuilt native binary download URLs.
 
 ## 1.4.1
 * Eliminate analyze info prompt
