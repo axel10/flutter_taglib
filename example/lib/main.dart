@@ -93,6 +93,12 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   String? _customCoverMimeType;
   bool _coverChanged = false;
 
+  // Benchmark state
+  bool _isBenchmarking = false;
+  double _benchmarkProgress = 0.0;
+  int _benchmarkIterations = 1000;
+  _BenchmarkResult? _benchmarkResult;
+
   @override
   void initState() {
     super.initState();
@@ -539,6 +545,93 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
     }
   }
 
+  Future<void> _runBenchmark() async {
+    if (_tagLibFile == null) return;
+    final filePath = _tagLibFile!.path;
+
+    setState(() {
+      _isBenchmarking = true;
+      _benchmarkProgress = 0.0;
+      _benchmarkResult = null;
+    });
+
+    final iterations = _benchmarkIterations;
+
+    // Warm up phase (10 reads)
+    for (int i = 0; i < 10; i++) {
+      final f = TagLibFile.open(filePath);
+      if (f != null) {
+        final _ = f.title;
+        final _ = f.artist;
+        final _ = f.album;
+        final _ = f.genre;
+        final _ = f.comment;
+        final _ = f.year;
+        final _ = f.track;
+        final _ = f.duration;
+        final _ = f.bitrate;
+        final _ = f.sampleRate;
+        final _ = f.channels;
+        final _ = f.hasCover;
+        f.close();
+      }
+    }
+
+    final stopwatch = Stopwatch()..start();
+    int successCount = 0;
+    final batchSize = (iterations / 20).ceil().clamp(1, 100);
+
+    for (int i = 0; i < iterations; i++) {
+      final f = TagLibFile.open(filePath);
+      if (f != null) {
+        final _ = f.title;
+        final _ = f.artist;
+        final _ = f.album;
+        final _ = f.genre;
+        final _ = f.comment;
+        final _ = f.year;
+        final _ = f.track;
+        final _ = f.duration;
+        final _ = f.bitrate;
+        final _ = f.sampleRate;
+        final _ = f.channels;
+        final _ = f.hasCover;
+        f.close();
+        successCount++;
+      }
+
+      if (i % batchSize == 0 || i == iterations - 1) {
+        if (!mounted) return;
+        setState(() {
+          _benchmarkProgress = (i + 1) / iterations;
+        });
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    stopwatch.stop();
+
+    final totalMs = stopwatch.elapsedMilliseconds;
+    final totalUs = stopwatch.elapsedMicroseconds;
+    final avgMs = totalMs / iterations;
+    final avgUs = totalUs / iterations;
+    final opsPerSec = (iterations / (totalUs / 1000000.0));
+
+    if (!mounted) return;
+
+    setState(() {
+      _isBenchmarking = false;
+      _benchmarkResult = _BenchmarkResult(
+        iterations: iterations,
+        successCount: successCount,
+        totalMs: totalMs,
+        avgMs: avgMs,
+        avgUs: avgUs,
+        opsPerSec: opsPerSec,
+      );
+    });
+  }
+
   String _formatDuration(Duration duration) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     String threeDigits(int n) => n.toString().padLeft(3, '0');
@@ -644,6 +737,8 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
                           ),
                           const SizedBox(height: 24),
                           _buildAudioPropertiesSection(),
+                          const SizedBox(height: 24),
+                          _buildBenchmarkSection(),
                           const SizedBox(
                             height: 100,
                           ), // Padding for the floating save button
@@ -1198,6 +1293,172 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       ),
     );
   }
+
+  Widget _buildBenchmarkSection() {
+    if (_tagLibFile == null) return const SizedBox.shrink();
+
+    final result = _benchmarkResult;
+
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.speed, color: Color(0xFF6366F1), size: 24),
+                    SizedBox(width: 8),
+                    Text(
+                      'Performance Benchmark',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF818CF8),
+                      ),
+                    ),
+                  ],
+                ),
+                DropdownButton<int>(
+                  value: _benchmarkIterations,
+                  dropdownColor: const Color(0xFF1E293B),
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  underline: const SizedBox.shrink(),
+                  items: const [
+                    DropdownMenuItem(value: 100, child: Text('100 Reads')),
+                    DropdownMenuItem(value: 1000, child: Text('1,000 Reads')),
+                    DropdownMenuItem(value: 5000, child: Text('5,000 Reads')),
+                  ],
+                  onChanged: _isBenchmarking
+                      ? null
+                      : (val) {
+                          if (val != null) {
+                            setState(() {
+                              _benchmarkIterations = val;
+                            });
+                          }
+                        },
+                ),
+              ],
+            ),
+            const Divider(color: Color(0xFF334155), height: 24),
+            Text(
+              'Test metadata extraction performance by opening, reading properties, and closing the audio file $_benchmarkIterations times.',
+              style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+            ),
+            const SizedBox(height: 16),
+            if (_isBenchmarking) ...[
+              LinearProgressIndicator(
+                value: _benchmarkProgress,
+                backgroundColor: const Color(0xFF334155),
+                color: const Color(0xFF6366F1),
+                minHeight: 8,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Running benchmark: ${(_benchmarkProgress * 100).toStringAsFixed(0)}% (${(_benchmarkProgress * _benchmarkIterations).toInt()} / $_benchmarkIterations)',
+                style: TextStyle(color: Colors.indigo.shade200, fontSize: 13),
+              ),
+            ] else ...[
+              ElevatedButton.icon(
+                onPressed: _runBenchmark,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF6366F1),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 12,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                icon: const Icon(Icons.play_arrow, size: 20),
+                label: Text(
+                  'Run Benchmark ($_benchmarkIterations Reads)',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+            if (result != null && !_isBenchmarking) ...[
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F172A),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF334155)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Benchmark Results',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                        color: Color(0xFF10B981),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildMetricTile(
+                            'Total Time',
+                            '${result.totalMs} ms',
+                            Icons.timer,
+                          ),
+                        ),
+                        Expanded(
+                          child: _buildMetricTile(
+                            'Avg Time / Read',
+                            '${result.avgMs.toStringAsFixed(3)} ms',
+                            Icons.av_timer,
+                          ),
+                        ),
+                        Expanded(
+                          child: _buildMetricTile(
+                            'Throughput',
+                            '${result.opsPerSec.toStringAsFixed(0)} / sec',
+                            Icons.flash_on,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMetricTile(String label, String value, IconData icon) {
+    return Column(
+      children: [
+        Icon(icon, color: const Color(0xFF10B981), size: 20),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(color: Colors.grey.shade400, fontSize: 11),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
+      ],
+    );
+  }
 }
 
 class _AudioPropertyItem {
@@ -1209,5 +1470,23 @@ class _AudioPropertyItem {
     required this.label,
     required this.value,
     required this.icon,
+  });
+}
+
+class _BenchmarkResult {
+  final int iterations;
+  final int successCount;
+  final int totalMs;
+  final double avgMs;
+  final double avgUs;
+  final double opsPerSec;
+
+  _BenchmarkResult({
+    required this.iterations,
+    required this.successCount,
+    required this.totalMs,
+    required this.avgMs,
+    required this.avgUs,
+    required this.opsPerSec,
   });
 }
