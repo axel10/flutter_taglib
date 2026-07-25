@@ -546,8 +546,16 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
   }
 
   Future<void> _runBenchmark() async {
-    if (_tagLibFile == null) return;
-    final filePath = _tagLibFile!.path;
+    if (_tagLibFile == null && _filePath == null) return;
+    final filePath = _filePath ?? _tagLibFile?.path;
+    if (filePath == null) return;
+
+    final fileName = _fileName;
+    final pickedFile = _pickedAudioFile;
+
+    // Temporarily close the UI file handle so Windows OS file locking doesn't block benchmark open calls
+    _tagLibFile?.close();
+    _tagLibFile = null;
 
     setState(() {
       _isBenchmarking = true;
@@ -555,81 +563,90 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       _benchmarkResult = null;
     });
 
-    final iterations = _benchmarkIterations;
+    try {
+      final iterations = _benchmarkIterations;
 
-    // Warm up phase (10 reads)
-    for (int i = 0; i < 10; i++) {
-      final f = TagLibFile.open(filePath);
-      if (f != null) {
-        final _ = f.title;
-        final _ = f.artist;
-        final _ = f.album;
-        final _ = f.genre;
-        final _ = f.comment;
-        final _ = f.year;
-        final _ = f.track;
-        final _ = f.duration;
-        final _ = f.bitrate;
-        final _ = f.sampleRate;
-        final _ = f.channels;
-        final _ = f.hasCover;
-        f.close();
-      }
-    }
-
-    final stopwatch = Stopwatch()..start();
-    int successCount = 0;
-    final batchSize = (iterations / 20).ceil().clamp(1, 100);
-
-    for (int i = 0; i < iterations; i++) {
-      final f = TagLibFile.open(filePath);
-      if (f != null) {
-        final _ = f.title;
-        final _ = f.artist;
-        final _ = f.album;
-        final _ = f.genre;
-        final _ = f.comment;
-        final _ = f.year;
-        final _ = f.track;
-        final _ = f.duration;
-        final _ = f.bitrate;
-        final _ = f.sampleRate;
-        final _ = f.channels;
-        final _ = f.hasCover;
-        f.close();
-        successCount++;
+      // Warm up phase (10 reads)
+      for (int i = 0; i < 10; i++) {
+        final f = TagLibFile.open(filePath);
+        if (f != null) {
+          final _ = f.title;
+          final _ = f.artist;
+          final _ = f.album;
+          final _ = f.genre;
+          final _ = f.comment;
+          final _ = f.year;
+          final _ = f.track;
+          final _ = f.duration;
+          final _ = f.bitrate;
+          final _ = f.sampleRate;
+          final _ = f.channels;
+          final _ = f.hasCover;
+          f.close();
+        }
       }
 
-      if (i % batchSize == 0 || i == iterations - 1) {
-        if (!mounted) return;
+      final stopwatch = Stopwatch()..start();
+      int successCount = 0;
+      final batchSize = (iterations / 20).ceil().clamp(1, 100);
+
+      for (int i = 0; i < iterations; i++) {
+        final f = TagLibFile.open(filePath);
+        if (f != null) {
+          final _ = f.title;
+          final _ = f.artist;
+          final _ = f.album;
+          final _ = f.genre;
+          final _ = f.comment;
+          final _ = f.year;
+          final _ = f.track;
+          final _ = f.duration;
+          final _ = f.bitrate;
+          final _ = f.sampleRate;
+          final _ = f.channels;
+          final _ = f.hasCover;
+          f.close();
+          successCount++;
+        }
+
+        if (i % batchSize == 0 || i == iterations - 1) {
+          if (!mounted) return;
+          setState(() {
+            _benchmarkProgress = (i + 1) / iterations;
+          });
+          await Future<void>.delayed(Duration.zero);
+        }
+      }
+
+      stopwatch.stop();
+
+      final totalMs = stopwatch.elapsedMilliseconds;
+      final totalUs = stopwatch.elapsedMicroseconds;
+      final avgMs = totalMs / iterations;
+      final avgUs = totalUs / iterations;
+      final opsPerSec = (iterations / (totalUs / 1000000.0));
+
+      if (!mounted) return;
+
+      setState(() {
+        _benchmarkResult = _BenchmarkResult(
+          iterations: iterations,
+          successCount: successCount,
+          totalMs: totalMs,
+          avgMs: avgMs,
+          avgUs: avgUs,
+          opsPerSec: opsPerSec,
+        );
+      });
+    } finally {
+      // Re-open UI file handle for the editor screen
+      await _loadFile(filePath, name: fileName, pickedAudioFile: pickedFile);
+      if (mounted) {
         setState(() {
-          _benchmarkProgress = (i + 1) / iterations;
+          _isBenchmarking = false;
         });
-        await Future<void>.delayed(Duration.zero);
       }
     }
-
-    stopwatch.stop();
-
-    final totalMs = stopwatch.elapsedMilliseconds;
-    final totalUs = stopwatch.elapsedMicroseconds;
-    final avgMs = totalMs / iterations;
-    final avgUs = totalUs / iterations;
-    final opsPerSec = (iterations / (totalUs / 1000000.0));
-
-    if (!mounted) return;
-
-    setState(() {
-      _isBenchmarking = false;
-      _benchmarkResult = _BenchmarkResult(
-        iterations: iterations,
-        successCount: successCount,
-        totalMs: totalMs,
-        avgMs: avgMs,
-        avgUs: avgUs,
-        opsPerSec: opsPerSec,
-      );
-    });
   }
 
   String _formatDuration(Duration duration) {
