@@ -91,8 +91,8 @@ void main(List<String> args) async {
           .toLowerCase();
       final abi = _mapArchitectureToAndroidAbi(archStr);
       if (abi != null && abi != 'x86') {
-        final remoteFileName = 'libflutter_taglib_android_$abi.so';
-        final localFileName = 'libflutter_taglib_native_$abi.so';
+        final remoteFileName = 'flutter_taglib_android_$abi.so';
+        final localFileName = 'libflutter_taglib_native.so';
 
         final cacheDir = Directory.fromUri(
           input.packageRoot.resolve('.dart_tool/flutter_taglib/prebuilt/'),

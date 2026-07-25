@@ -30,6 +30,7 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
     private var activity: Activity? = null
     private var pendingResult: Result? = null
     private var pendingPermissionResult: Result? = null
+    private var pendingPickDirectoryResult: Result? = null
     private var resolvedUriString: String? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -37,10 +38,137 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
         private const val TAG = "FlutterTaglibPlugin"
         private const val REQUEST_WRITE_PERMISSION = 1045
         private const val REQUEST_STORAGE_PERMISSION = 1046
+        private const val REQUEST_PICK_SAF_DIRECTORY = 1047
+
+        @Volatile
+        private var isNativeLibraryLoaded = false
+
+        @JvmStatic
+        fun ensureNativeLibraryLoaded(context: Context?): Boolean {
+            if (isNativeLibraryLoaded) return true
+
+            val candidateNames = mutableListOf<String>()
+            candidateNames.add("flutter_taglib_native")
+            candidateNames.add("flutter_taglib")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                for (abi in Build.SUPPORTED_ABIS) {
+                    candidateNames.add("flutter_taglib_native_$abi")
+                    candidateNames.add("flutter_taglib_$abi")
+                }
+            }
+
+            val loadErrors = mutableListOf<String>()
+            for (libName in candidateNames) {
+                try {
+                    System.loadLibrary(libName)
+                    isNativeLibraryLoaded = true
+                    Log.d(TAG, "Loaded native library via System.loadLibrary: $libName")
+                    return true
+                } catch (e: Throwable) {
+                    loadErrors.add("$libName (${e.message})")
+                }
+            }
+
+            if (context != null) {
+                try {
+                    val libDirFile = java.io.File(context.applicationInfo.nativeLibraryDir)
+                    Log.d(TAG, "Inspecting nativeLibraryDir: ${libDirFile.absolutePath}, exists=${libDirFile.exists()}")
+                    if (libDirFile.exists() && libDirFile.isDirectory) {
+                        val files = libDirFile.listFiles()
+                        if (files != null) {
+                            for (file in files) {
+                                Log.d(TAG, "Found native lib in dir: ${file.name}")
+                                if (file.name.endsWith(".so") && (file.name.contains("flutter_taglib") || file.name.contains("taglib"))) {
+                                    try {
+                                        System.load(file.absolutePath)
+                                        isNativeLibraryLoaded = true
+                                        Log.d(TAG, "Loaded native library via System.load: ${file.absolutePath}")
+                                        return true
+                                    } catch (e: Throwable) {
+                                        loadErrors.add("${file.name} (${e.message})")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Throwable) {
+                    loadErrors.add("nativeLibraryDir (${e.message})")
+                }
+            }
+            Log.w(TAG, "Failed to load native library. Attempted candidates: ${candidateNames.joinToString(", ")}. Errors: ${loadErrors.joinToString("; ")}")
+            return false
+        }
+
+        init {
+            ensureNativeLibraryLoaded(null)
+        }
+
+        @JvmStatic
+        external fun nativeInitContext(context: Context)
+
+        @JvmStatic
+        fun resolvePathToSafUriStr(context: Context, path: String): String? {
+            val uri = resolvePhysicalPathToSafUri(context, path)
+            return uri?.toString()
+        }
+
+        @JvmStatic
+        fun resolvePhysicalPathToSafUri(context: Context, physicalPath: String): Uri? {
+            try {
+                val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                val mappingsJson = prefs.getString("flutter.saf_tree_mappings_v1", null)
+                if (mappingsJson != null) {
+                    val mappings = JSONObject(mappingsJson)
+                    val normalizedFile = java.io.File(physicalPath).absolutePath.lowercase()
+                    var bestRoot: String? = null
+                    var bestTreeUriStr: String? = null
+                    
+                    val keys = mappings.keys()
+                    while (keys.hasNext()) {
+                        val rootPath = keys.next()
+                        val normalizedRoot = java.io.File(rootPath).absolutePath.lowercase()
+                        if (normalizedFile.startsWith(normalizedRoot)) {
+                            if (bestRoot == null || rootPath.length > bestRoot.length) {
+                                bestRoot = rootPath
+                                bestTreeUriStr = mappings.getString(rootPath)
+                            }
+                        }
+                    }
+                    
+                    if (bestRoot != null && bestTreeUriStr != null) {
+                        val relativePath = physicalPath.substring(bestRoot.length).trimStart('/', '\\')
+                        val normalizedRelativePath = relativePath.replace('\\', '/')
+                        
+                        val treeUri = Uri.parse(bestTreeUriStr)
+                        val treeId = DocumentsContract.getTreeDocumentId(treeUri)
+                        
+                        val childDocumentId = if (normalizedRelativePath.isEmpty()) {
+                            treeId
+                        } else {
+                            "$treeId/$normalizedRelativePath"
+                        }
+                        
+                        return DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocumentId)
+                    }
+                }
+
+                return null
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resolving path to SAF URI: ${e.message}", e)
+                return null
+            }
+        }
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         context = binding.applicationContext
+        ensureNativeLibraryLoaded(binding.applicationContext)
+        try {
+            nativeInitContext(binding.applicationContext)
+            Log.d(TAG, "onAttachedToEngine: Initialized native JNI context")
+        } catch (e: Throwable) {
+            Log.w(TAG, "onAttachedToEngine: Failed to initialize native JNI context: ${e.message}")
+        }
         channel = MethodChannel(binding.binaryMessenger, "flutter_taglib")
         channel?.setMethodCallHandler(this)
         Log.d(TAG, "onAttachedToEngine: Plugin registered")
@@ -90,6 +218,38 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
             }
             Log.d(TAG, "onMethodCall listSafDirectory: uri=$uriStr")
             handleListSafDirectory(uriStr, result)
+        } else if (call.method == "pickSafDirectory") {
+            Log.d(TAG, "onMethodCall pickSafDirectory")
+            handlePickSafDirectory(result)
+        } else if (call.method == "saveSafTreeMapping") {
+            val posixPath = call.argument<String>("posixPath")
+            val treeUri = call.argument<String>("treeUri")
+            if (posixPath == null || treeUri == null) {
+                result.error("INVALID_ARGUMENT", "posixPath or treeUri is null", null)
+                return
+            }
+            val safeContext = context ?: activity
+            if (safeContext != null) {
+                val ok = saveSafMappingInternal(safeContext, posixPath, treeUri)
+                result.success(ok)
+            } else {
+                result.success(false)
+            }
+        } else if (call.method == "initNativeContext") {
+            val safeContext = context ?: activity
+            if (safeContext != null) {
+                ensureNativeLibraryLoaded(safeContext)
+                try {
+                    nativeInitContext(safeContext)
+                    Log.d(TAG, "initNativeContext: Native JNI context initialized successfully")
+                    result.success(true)
+                } catch (e: Throwable) {
+                    Log.w(TAG, "initNativeContext failed: ${e.message}")
+                    result.success(false)
+                }
+            } else {
+                result.success(false)
+            }
         } else if (call.method == "requestStoragePermission") {
             Log.d(TAG, "onMethodCall requestStoragePermission")
             handleRequestStoragePermission(result)
@@ -358,51 +518,7 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
         }
     }
 
-    private fun resolvePhysicalPathToSafUri(context: Context, physicalPath: String): Uri? {
-        try {
-            val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
-            val mappingsJson = prefs.getString("flutter.saf_tree_mappings_v1", null)
-            if (mappingsJson != null) {
-                val mappings = JSONObject(mappingsJson)
-                val normalizedFile = java.io.File(physicalPath).absolutePath.lowercase()
-                var bestRoot: String? = null
-                var bestTreeUriStr: String? = null
-                
-                val keys = mappings.keys()
-                while (keys.hasNext()) {
-                    val rootPath = keys.next()
-                    val normalizedRoot = java.io.File(rootPath).absolutePath.lowercase()
-                    if (normalizedFile.startsWith(normalizedRoot)) {
-                        if (bestRoot == null || rootPath.length > bestRoot.length) {
-                            bestRoot = rootPath
-                            bestTreeUriStr = mappings.getString(rootPath)
-                        }
-                    }
-                }
-                
-                if (bestRoot != null && bestTreeUriStr != null) {
-                    val relativePath = physicalPath.substring(bestRoot.length).trimStart('/', '\\')
-                    val normalizedRelativePath = relativePath.replace('\\', '/')
-                    
-                    val treeUri = Uri.parse(bestTreeUriStr)
-                    val treeId = DocumentsContract.getTreeDocumentId(treeUri)
-                    
-                    val childDocumentId = if (normalizedRelativePath.isEmpty()) {
-                        treeId
-                    } else {
-                        "$treeId/$normalizedRelativePath"
-                    }
-                    
-                    return DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocumentId)
-                }
-            }
 
-            return null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error resolving path to SAF URI: ${e.message}", e)
-            return null
-        }
-    }
 
     private fun resolveToMediaStoreUri(context: Context, uri: Uri): Uri? {
         if (uri.authority == "media") {
@@ -551,8 +667,88 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
                 }
                 return true
             }
+        } else if (requestCode == REQUEST_PICK_SAF_DIRECTORY) {
+            val result = pendingPickDirectoryResult
+            pendingPickDirectoryResult = null
+            if (result != null) {
+                if (resultCode == Activity.RESULT_OK && data != null && data.data != null) {
+                    val treeUri = data.data!!
+                    val safeContext = context ?: activity
+                    if (safeContext != null) {
+                        val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        try {
+                            safeContext.contentResolver.takePersistableUriPermission(treeUri, takeFlags)
+                        } catch (e: Exception) {
+                            Log.w(TAG, "takePersistableUriPermission failed: ${e.message}")
+                        }
+
+                        var posixPath: String? = null
+                        try {
+                            val docId = DocumentsContract.getTreeDocumentId(treeUri)
+                            posixPath = if (docId.startsWith("primary:")) {
+                                val rel = docId.substring("primary:".length)
+                                "/storage/emulated/0/${rel.trimStart('/')}"
+                            } else if (docId.contains(":")) {
+                                val parts = docId.split(":")
+                                "/storage/${parts[0]}/${parts.subList(1, parts.size).joinToString(":")}"
+                            } else {
+                                "/storage/emulated/0/$docId"
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed resolving docId to POSIX path: ${e.message}")
+                        }
+
+                        if (posixPath != null) {
+                            saveSafMappingInternal(safeContext, posixPath, treeUri.toString())
+                            result.success(posixPath)
+                        } else {
+                            result.success(treeUri.toString())
+                        }
+                    } else {
+                        result.success(treeUri.toString())
+                    }
+                } else {
+                    result.success(null)
+                }
+                return true
+            }
         }
         return false
+    }
+
+    private fun handlePickSafDirectory(result: Result) {
+        val safeActivity = activity ?: run {
+            result.error("NO_ACTIVITY", "Activity is null", null)
+            return
+        }
+
+        pendingPickDirectoryResult = result
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        try {
+            safeActivity.startActivityForResult(intent, REQUEST_PICK_SAF_DIRECTORY)
+        } catch (e: Exception) {
+            pendingPickDirectoryResult = null
+            result.error("PICK_FAILED", "Failed to start SAF picker: ${e.message}", null)
+        }
+    }
+
+    private fun saveSafMappingInternal(context: Context, posixPath: String, treeUriStr: String): Boolean {
+        return try {
+            val prefs = context.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            val mappingsJsonStr = prefs.getString("flutter.saf_tree_mappings_v1", "{}") ?: "{}"
+            val mappingsObj = JSONObject(mappingsJsonStr)
+            mappingsObj.put(posixPath, treeUriStr)
+            prefs.edit().putString("flutter.saf_tree_mappings_v1", mappingsObj.toString()).apply()
+            Log.d(TAG, "Saved SAF mapping: $posixPath -> $treeUriStr")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed saving SAF tree mapping: ${e.message}")
+            false
+        }
     }
 
     // ActivityAware implementation

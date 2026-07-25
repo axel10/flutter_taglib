@@ -59,6 +59,9 @@
 #include <unistd.h>
 #include <android/log.h>
 
+#undef JNIEXPORT
+#define JNIEXPORT __attribute__((visibility("default")))
+
 #define LOG_TAG "FlutterTaglib"
 #define LOGI(...) do {} while(0) // Disable info logs to optimize performance
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
@@ -70,12 +73,37 @@ static jobject g_context = nullptr;
 #ifdef __ANDROID__
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_vm = vm;
+    LOGW("FlutterTaglib JNI_OnLoad: g_vm initialized successfully");
     return JNI_VERSION_1_6;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_axel10_flutter_1taglib_FlutterTaglibPlugin_nativeInitContext(JNIEnv* env, jclass clazz, jobject context) {
+    if (env && !g_vm) {
+        env->GetJavaVM(&g_vm);
+        LOGW("FlutterTaglib nativeInitContext: g_vm initialized via GetJavaVM");
+    }
+    if (g_context != nullptr) {
+        env->DeleteGlobalRef(g_context);
+        g_context = nullptr;
+    }
+    if (context != nullptr) {
+        g_context = env->NewGlobalRef(context);
+        LOGW("FlutterTaglib nativeInitContext: g_context initialized successfully");
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_axel10_flutter_1taglib_FlutterTaglibPlugin_00024Companion_nativeInitContext(JNIEnv* env, jclass clazz, jobject context) {
+    Java_com_axel10_flutter_1taglib_FlutterTaglibPlugin_nativeInitContext(env, clazz, context);
 }
 #endif
 
 static JNIEnv* get_jni_env() {
-    if (!g_vm) return nullptr;
+    if (!g_vm) {
+        LOGE("get_jni_env: g_vm is null");
+        return nullptr;
+    }
     JNIEnv* env = nullptr;
     jint res = g_vm->GetEnv((void**)&env, JNI_VERSION_1_6);
     if (res == JNI_EDETACHED) {
@@ -85,8 +113,12 @@ static JNIEnv* get_jni_env() {
         res = g_vm->AttachCurrentThread((void**)&env, nullptr);
         #endif
         if (res != JNI_OK) {
+            LOGE("get_jni_env: AttachCurrentThread failed with error: %d", res);
             return nullptr;
         }
+    } else if (res != JNI_OK) {
+        LOGE("get_jni_env: GetEnv failed with error: %d", res);
+        return nullptr;
     }
     return env;
 }
@@ -505,8 +537,36 @@ TagLibBridgeFile* taglib_bridge_open_with_style(const char* filepath, int read_s
 #endif
         auto fileRef = new TagLib::FileRef(filename, readAudioProps, style);
         if (fileRef->isNull()) {
-            LOGE("taglib_bridge_open: fileRef is null (invalid file or format) for: %s", filepath);
             delete fileRef;
+#ifdef __ANDROID__
+            if (g_context != nullptr) {
+                JNIEnv* env = get_jni_env();
+                if (env) {
+                    jclass pluginClass = env->FindClass("com/axel10/flutter_taglib/FlutterTaglibPlugin");
+                    if (pluginClass) {
+                        jmethodID resolveMethod = env->GetStaticMethodID(pluginClass, "resolvePathToSafUriStr", "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;");
+                        if (resolveMethod) {
+                            jstring jpath = env->NewStringUTF(filepath);
+                            jstring juri = (jstring)env->CallStaticObjectMethod(pluginClass, resolveMethod, g_context, jpath);
+                            env->DeleteLocalRef(jpath);
+                            if (juri) {
+                                const char* safUriStr = env->GetStringUTFChars(juri, nullptr);
+                                LOGI("taglib_bridge_open: POSIX open failed, resolved SAF URI: %s", safUriStr);
+                                int fd = open_content_uri_fd(safUriStr, "r");
+                                env->ReleaseStringUTFChars(juri, safUriStr);
+                                env->DeleteLocalRef(juri);
+                                env->DeleteLocalRef(pluginClass);
+                                if (fd != -1) {
+                                    return taglib_bridge_open_fd_with_style(fd, read_style);
+                                }
+                            }
+                        }
+                        env->DeleteLocalRef(pluginClass);
+                    }
+                }
+            }
+#endif
+            LOGE("taglib_bridge_open: fileRef is null (invalid file or format) for: %s", filepath);
             return nullptr;
         }
 

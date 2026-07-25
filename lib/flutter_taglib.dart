@@ -240,11 +240,33 @@ class TagLibFile {
     }
   }
 
+  static bool _androidContextInitialized = false;
+
+  /// Ensures native JNI context (JavaVM and Application Context) is initialized on Android.
+  static Future<void> _initAndroidNativeContext() async {
+    if (!Platform.isAndroid || _androidContextInitialized) return;
+    try {
+      if (isSupported) {
+        // Accessing FFI symbol forces Dart FFI to load libflutter_taglib_native.so into process memory
+        bindings.taglib_bridge_close(ffi.nullptr);
+      }
+      final bool? success =
+          await _channel.invokeMethod<bool>('initNativeContext');
+      if (success == true) {
+        _androidContextInitialized = true;
+        _logger.fine('initNativeContext succeeded');
+      }
+    } catch (e) {
+      _logger.warning('initNativeContext failed: $e');
+    }
+  }
+
   /// Recursively lists supported audio files in a SAF directory or SAF tree URI on Android.
   /// Returns a list of document `content://` URIs.
   static Future<List<String>> listSafDirectory(String uri) async {
     if (!Platform.isAndroid) return [];
     if (!isSupported) return [];
+    await _initAndroidNativeContext();
     try {
       final List<dynamic>? result = await _channel.invokeMethod<List<dynamic>>(
         'listSafDirectory',
@@ -285,6 +307,44 @@ class TagLibFile {
       return granted ?? false;
     } catch (e) {
       _logger.warning('checkStoragePermission failed: $e');
+      return false;
+    }
+  }
+
+  /// Opens the native Android SAF directory picker (`ACTION_OPEN_DOCUMENT_TREE`),
+  /// requests persistable URI permissions, saves the POSIX-to-SAF tree mapping,
+  /// and returns the selected POSIX directory path (or `null` if cancelled).
+  static Future<String?> pickSafDirectory() async {
+    if (!Platform.isAndroid) return null;
+    if (!isSupported) return null;
+    await _initAndroidNativeContext();
+    try {
+      final String? path = await _channel.invokeMethod<String>(
+        'pickSafDirectory',
+      );
+      return path;
+    } catch (e) {
+      _logger.warning('pickSafDirectory failed: $e');
+      lastError = 'pickSafDirectory failed: $e';
+      return null;
+    }
+  }
+
+  /// Manually saves a POSIX physical directory path to SAF tree URI mapping in SharedPreferences on Android.
+  static Future<bool> saveSafTreeMapping(
+    String posixPath,
+    String treeUri,
+  ) async {
+    if (!Platform.isAndroid) return false;
+    if (!isSupported) return false;
+    try {
+      final bool? success = await _channel.invokeMethod<bool>(
+        'saveSafTreeMapping',
+        {'posixPath': posixPath, 'treeUri': treeUri},
+      );
+      return success ?? false;
+    } catch (e) {
+      _logger.warning('saveSafTreeMapping failed: $e');
       return false;
     }
   }
@@ -445,6 +505,9 @@ class TagLibFile {
 
     if (Platform.isWindows || Platform.isLinux) {
       await prepareDesktopLibrary();
+    }
+    if (Platform.isAndroid) {
+      await _initAndroidNativeContext();
     }
     if (!isSupported) {
       throw UnsupportedError(

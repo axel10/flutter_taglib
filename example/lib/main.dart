@@ -666,7 +666,11 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
     String? dirPath = preSelectedDir;
     if (dirPath == null) {
       try {
-        dirPath = await FilePicker.getDirectoryPath();
+        if (Platform.isAndroid && useSafScan) {
+          dirPath = await TagLibFile.pickSafDirectory();
+        } else {
+          dirPath = await FilePicker.getDirectoryPath();
+        }
       } catch (e) {
         debugPrint('Directory pick error: $e');
       }
