@@ -47,6 +47,21 @@ class Picture {
 ///   file.close();
 /// }
 /// ```
+/// Audio properties reading style mode.
+enum TagLibAudioPropertiesStyle {
+  /// Fast mode: Only reads stream header metadata without full scanning. Recommended for fast batch scanning.
+  fast(0),
+  /// Average mode: Balanced default reading mode.
+  average(1),
+  /// Accurate mode: Full audio stream scan.
+  accurate(2),
+  /// None mode: Skip reading audio properties completely (duration/bitrate will return 0).
+  none(3);
+
+  final int value;
+  const TagLibAudioPropertiesStyle(this.value);
+}
+
 class TagLibFile {
   static const MethodChannel _channel = MethodChannel('flutter_taglib');
 
@@ -246,7 +261,10 @@ class TagLibFile {
   /// Opens an audio file by path.
   ///
   /// Returns `null` if the file could not be opened or is invalid.
-  static TagLibFile? open(String path) {
+  static TagLibFile? open(
+    String path, {
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
+  }) {
     if (!isSupported) {
       throw UnsupportedError(
         'flutter_taglib is not supported or has been disabled on this platform.',
@@ -254,7 +272,10 @@ class TagLibFile {
     }
     final pathPtr = path.toNativeUtf8();
     try {
-      final handle = bindings.taglib_bridge_open(pathPtr.cast<ffi.Char>());
+      final handle = bindings.taglib_bridge_open_with_style(
+        pathPtr.cast<ffi.Char>(),
+        audioPropertiesStyle.value,
+      );
       if (handle == ffi.nullptr) {
         _logger.severe(
           'Failed to open path "$path". Check native/platform logs for details.',
@@ -267,6 +288,16 @@ class TagLibFile {
     }
   }
 
+  static int lastOpenFfiCount = 0;
+  static int lastOpenFdFallbackCount = 0;
+  static int lastOpenContentUriCount = 0;
+
+  static void resetOpenStats() {
+    lastOpenFfiCount = 0;
+    lastOpenFdFallbackCount = 0;
+    lastOpenContentUriCount = 0;
+  }
+
   /// Opens an audio file by path asynchronously.
   ///
   /// On Android, if [writeAccess] is `true`, this method will automatically request
@@ -274,6 +305,7 @@ class TagLibFile {
   static Future<TagLibFile?> openAsync(
     String path, {
     bool writeAccess = false,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
   }) async {
     lastError = null;
     if (Platform.isWindows || Platform.isLinux) {
@@ -297,11 +329,10 @@ class TagLibFile {
       targetPath = grantedUri;
     }
 
-    final isLocalAndroid = Platform.isAndroid &&
-        !targetPath.startsWith('http://') &&
-        !targetPath.startsWith('https://');
+    final isContentUri = Platform.isAndroid && targetPath.startsWith('content://');
 
-    if (isLocalAndroid) {
+    if (isContentUri) {
+      lastOpenContentUriCount++;
       final fd = await _openAndroidFileDescriptor(
         targetPath,
         mode: writeAccess ? 'rw' : 'r',
@@ -314,24 +345,48 @@ class TagLibFile {
         debugPrint('[flutter_taglib] $lastError');
         return null;
       }
-      return TagLibFile.openFd(fd, path: targetPath);
+      return TagLibFile.openFd(
+        fd,
+        path: targetPath,
+        audioPropertiesStyle: audioPropertiesStyle,
+      );
     }
 
-    final pathPtr = targetPath.toNativeUtf8();
-    try {
-      final handle = bindings.taglib_bridge_open(pathPtr.cast<ffi.Char>());
-      if (handle == ffi.nullptr) {
-        _logger.severe(
-          'Failed to open path "$targetPath". Check native/platform logs for details.',
-        );
-        lastError = 'Failed to open path via TagLib bridge for "$targetPath". File might be corrupted or not exist.';
-        debugPrint('[flutter_taglib] $lastError');
-        return null;
-      }
-      return TagLibFile._(handle, targetPath);
-    } finally {
-      malloc.free(pathPtr);
+    // Try direct native FFI open first (fast path for POSIX paths on all platforms including Android)
+    final directFile = TagLibFile.open(
+      targetPath,
+      audioPropertiesStyle: audioPropertiesStyle,
+    );
+    if (directFile != null) {
+      lastOpenFfiCount++;
+      return directFile;
     }
+
+    // Fallback for Android POSIX paths if direct FFI open failed (e.g. Scoped Storage restriction)
+    if (Platform.isAndroid) {
+      lastOpenFdFallbackCount++;
+      debugPrint(
+        '[flutter_taglib openAsync] Native TagLibFile.open returned null for POSIX path: $targetPath. Falling back to _openAndroidFileDescriptor...',
+      );
+      final fd = await _openAndroidFileDescriptor(
+        targetPath,
+        mode: writeAccess ? 'rw' : 'r',
+      );
+      if (fd != null) {
+        return TagLibFile.openFd(
+          fd,
+          path: targetPath,
+          audioPropertiesStyle: audioPropertiesStyle,
+        );
+      }
+    }
+
+    _logger.severe(
+      'Failed to open path "$targetPath". Check native/platform logs for details.',
+    );
+    lastError = 'Failed to open path via TagLib bridge for "$targetPath". File might be corrupted or not exist.';
+    debugPrint('[flutter_taglib] $lastError');
+    return null;
   }
 
   /// Opens an audio file by its Unix File Descriptor (FD).
@@ -341,13 +396,20 @@ class TagLibFile {
   /// or MediaStore.
   ///
   /// Returns `null` if the file could not be opened.
-  static TagLibFile? openFd(int fd, {String path = ''}) {
+  static TagLibFile? openFd(
+    int fd, {
+    String path = '',
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.fast,
+  }) {
     if (!isSupported) {
       throw UnsupportedError(
         'flutter_taglib is not supported or has been disabled on this platform.',
       );
     }
-    final handle = bindings.taglib_bridge_open_fd(fd);
+    final handle = bindings.taglib_bridge_open_fd_with_style(
+      fd,
+      audioPropertiesStyle.value,
+    );
     if (handle == ffi.nullptr) {
       _logger.severe(
         'Failed to open FD $fd. Check native/platform logs for details.',

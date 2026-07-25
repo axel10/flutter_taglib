@@ -22,8 +22,22 @@ ffi.Pointer<TagLibBridgeFile> taglib_bridge_open(
   return generated.taglib_bridge_open(filepath);
 }
 
+ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_with_style(
+  ffi.Pointer<ffi.Char> filepath,
+  int readStyle,
+) {
+  return generated.taglib_bridge_open_with_style(filepath, readStyle);
+}
+
 ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd(int fd) {
   return generated.taglib_bridge_open_fd(fd);
+}
+
+ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd_with_style(
+  int fd,
+  int readStyle,
+) {
+  return generated.taglib_bridge_open_fd_with_style(fd, readStyle);
 }
 
 int taglib_bridge_save(ffi.Pointer<TagLibBridgeFile> file) {

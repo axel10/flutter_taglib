@@ -15,9 +15,23 @@ external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open(
   ffi.Pointer<ffi.Char> filepath,
 );
 
+/// Open a file by file path with audio properties read style option (0=Fast, 1=Average, 2=Accurate, 3=None).
+@ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Pointer<ffi.Char>, ffi.Int)>()
+external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_with_style(
+  ffi.Pointer<ffi.Char> filepath,
+  int read_style,
+);
+
 /// Open a file by File Descriptor (FD). Returns NULL if failed.
 @ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Int)>()
 external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd(int fd);
+
+/// Open a file by File Descriptor (FD) with audio properties read style option.
+@ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Int, ffi.Int)>()
+external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd_with_style(
+  int fd,
+  int read_style,
+);
 
 /// Save changes to the file. Returns 1 on success, 0 on failure.
 @ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()

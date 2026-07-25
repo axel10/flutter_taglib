@@ -449,7 +449,32 @@ JNIEXPORT void JNICALL Java_com_axel10_flutter_1taglib_FlutterTaglibPlugin_clear
 }
 #endif
 
-TagLibBridgeFile* taglib_bridge_open(const char* filepath) {
+static void resolve_read_style(int read_style, bool& readAudioProperties, TagLib::AudioProperties::ReadStyle& style) {
+    switch (read_style) {
+        case 0: // Fast
+            readAudioProperties = true;
+            style = TagLib::AudioProperties::Fast;
+            break;
+        case 1: // Average
+            readAudioProperties = true;
+            style = TagLib::AudioProperties::Average;
+            break;
+        case 2: // Accurate
+            readAudioProperties = true;
+            style = TagLib::AudioProperties::Accurate;
+            break;
+        case 3: // None
+            readAudioProperties = false;
+            style = TagLib::AudioProperties::Fast;
+            break;
+        default:
+            readAudioProperties = true;
+            style = TagLib::AudioProperties::Average;
+            break;
+    }
+}
+
+TagLibBridgeFile* taglib_bridge_open_with_style(const char* filepath, int read_style) {
     if (!filepath) {
         LOGE("taglib_bridge_open: filepath is null");
         return nullptr;
@@ -464,22 +489,26 @@ TagLibBridgeFile* taglib_bridge_open(const char* filepath) {
             fd = open_content_uri_fd(filepath, "r");
         }
         if (fd != -1) {
-            return taglib_bridge_open_fd(fd);
+            return taglib_bridge_open_fd_with_style(fd, read_style);
         }
         LOGE("taglib_bridge_open: failed to open content URI fd for: %s", filepath);
         return nullptr;
     }
 #endif
 
-    LOGI("taglib_bridge_open: opening file path: %s", filepath);
+    LOGI("taglib_bridge_open: opening file path: %s with style: %d", filepath, read_style);
     try {
+        bool readAudioProps = true;
+        TagLib::AudioProperties::ReadStyle style = TagLib::AudioProperties::Average;
+        resolve_read_style(read_style, readAudioProps, style);
+
 #ifdef _WIN32
         TagLib::String pathStr(filepath, TagLib::String::UTF8);
         TagLib::FileName filename(pathStr.toWString().c_str());
 #else
         TagLib::FileName filename = filepath;
 #endif
-        auto fileRef = new TagLib::FileRef(filename);
+        auto fileRef = new TagLib::FileRef(filename, readAudioProps, style);
         if (fileRef->isNull()) {
             LOGE("taglib_bridge_open: fileRef is null (invalid file or format) for: %s", filepath);
             delete fileRef;
@@ -500,11 +529,13 @@ TagLibBridgeFile* taglib_bridge_open(const char* filepath) {
     }
 }
 
-TagLibBridgeFile* taglib_bridge_open_fd(int fd) {
-    LOGI("taglib_bridge_open_fd: opening fd: %d", fd);
+TagLibBridgeFile* taglib_bridge_open(const char* filepath) {
+    return taglib_bridge_open_with_style(filepath, 1);
+}
+
+TagLibBridgeFile* taglib_bridge_open_fd_with_style(int fd, int read_style) {
+    LOGI("taglib_bridge_open_fd: opening fd: %d with style: %d", fd, read_style);
     try {
-        // TagLib::FileStream is an IOStream wrapping fd.
-        // First try read/write (false), then read-only (true).
         auto stream = new TagLib::FileStream(fd, false);
         if (!stream->isOpen()) {
             LOGW("taglib_bridge_open_fd: fd %d cannot be opened as read-write, trying read-only", fd);
@@ -523,8 +554,11 @@ TagLibBridgeFile* taglib_bridge_open_fd(int fd) {
             LOGI("taglib_bridge_open_fd: fd %d opened successfully in read-write mode", fd);
         }
 
-        // FileRef does not take ownership of stream.
-        auto fileRef = new TagLib::FileRef(stream);
+        bool readAudioProps = true;
+        TagLib::AudioProperties::ReadStyle style = TagLib::AudioProperties::Average;
+        resolve_read_style(read_style, readAudioProps, style);
+
+        auto fileRef = new TagLib::FileRef(stream, readAudioProps, style);
         if (fileRef->isNull()) {
             LOGE("taglib_bridge_open_fd: fileRef is null (invalid file or format) for fd: %d", fd);
             delete fileRef;
@@ -543,6 +577,10 @@ TagLibBridgeFile* taglib_bridge_open_fd(int fd) {
         LOGE("taglib_bridge_open_fd: unknown exception caught");
         return nullptr;
     }
+}
+
+TagLibBridgeFile* taglib_bridge_open_fd(int fd) {
+    return taglib_bridge_open_fd_with_style(fd, 1);
 }
 
 int taglib_bridge_save(TagLibBridgeFile* file) {

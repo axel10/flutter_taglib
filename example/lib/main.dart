@@ -704,8 +704,10 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         'spx',
       };
 
+      TagLibFile.resetOpenStats();
       final audioFilePaths = <String>[];
       final String scanModeLabel;
+      final listStopwatch = Stopwatch()..start();
 
       if (Platform.isAndroid && useSafScan) {
         scanModeLabel = 'SAF (DocumentTree)';
@@ -792,6 +794,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
           }
         }
       }
+      listStopwatch.stop();
 
       if (audioFilePaths.isEmpty) {
         if (!mounted) return;
@@ -809,6 +812,10 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       final formatBreakdown = <String, int>{};
       final sampleSongs = <ScannedSongMetadata>[];
 
+      int totalOpenMicroseconds = 0;
+      int totalBasicPropertiesMicroseconds = 0;
+      int totalHasCoverMicroseconds = 0;
+
       final stopwatch = Stopwatch()..start();
 
       for (int i = 0; i < totalFiles; i++) {
@@ -816,8 +823,13 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
         final ext = filePath.split('.').last.toUpperCase();
         formatBreakdown[ext] = (formatBreakdown[ext] ?? 0) + 1;
 
+        final swOpen = Stopwatch()..start();
         final f = await TagLibFile.openAsync(filePath);
+        swOpen.stop();
+        totalOpenMicroseconds += swOpen.elapsedMicroseconds;
+
         if (f != null) {
+          final swBasic = Stopwatch()..start();
           final title = f.title;
           final artist = f.artist;
           final album = f.album;
@@ -829,7 +841,13 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
           final bitrate = f.bitrate;
           final sampleRate = f.sampleRate;
           final channels = f.channels;
+          swBasic.stop();
+          totalBasicPropertiesMicroseconds += swBasic.elapsedMicroseconds;
+
+          final swCover = Stopwatch()..start();
           final hasCover = f.hasCover;
+          swCover.stop();
+          totalHasCoverMicroseconds += swCover.elapsedMicroseconds;
 
           if (sampleSongs.length < 10) {
             final fileName = filePath.startsWith('content://')
@@ -860,7 +878,7 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
           failCount++;
         }
 
-        if (i % 5 == 0 || i == totalFiles - 1) {
+        if (i % 20 == 0 || i == totalFiles - 1) {
           if (!mounted) return;
           setState(() {
             _benchmarkProgress = (i + 1) / totalFiles;
@@ -878,6 +896,32 @@ class _MetadataEditorScreenState extends State<MetadataEditorScreen> {
       final opsPerSec = stopwatch.elapsedMicroseconds > 0
           ? (totalFiles / (stopwatch.elapsedMicroseconds / 1000000.0))
           : 0.0;
+
+      debugPrint('''
+========== [SCAN BENCHMARK DIAGNOSTICS] ==========
+Scan Mode: $scanModeLabel
+Target Directory: $dirPath
+Total Files Found: $totalFiles
+
+[Timing Breakdown]
+- Phase 1 (Directory Listing): ${listStopwatch.elapsedMilliseconds} ms
+- Phase 2 (Tag Reading Loop):  $totalMs ms
+- Total Combined Time:        ${listStopwatch.elapsedMilliseconds + totalMs} ms
+
+[TagLib Step Timing Breakdown]
+- TagLibFile.openAsync time:       ${(totalOpenMicroseconds / 1000.0).toStringAsFixed(1)} ms (${(totalOpenMicroseconds / (totalFiles > 0 ? totalFiles : 1) / 1000.0).toStringAsFixed(2)} ms/file)
+- Basic Metadata Getters time:      ${(totalBasicPropertiesMicroseconds / 1000.0).toStringAsFixed(1)} ms (${(totalBasicPropertiesMicroseconds / (totalFiles > 0 ? totalFiles : 1) / 1000.0).toStringAsFixed(2)} ms/file)
+- hasCover Check time:             ${(totalHasCoverMicroseconds / 1000.0).toStringAsFixed(1)} ms (${(totalHasCoverMicroseconds / (totalFiles > 0 ? totalFiles : 1) / 1000.0).toStringAsFixed(2)} ms/file)
+
+[TagLib Parsing Performance]
+- Tag Reading Rate: ${opsPerSec.toStringAsFixed(1)} songs/sec (${avgMs.toStringAsFixed(2)} ms/song)
+
+[Open Method Statistics]
+- Direct FFI Open (Fast Path):     ${TagLibFile.lastOpenFfiCount} files
+- MethodChannel FD Fallback:      ${TagLibFile.lastOpenFdFallbackCount} files
+- Content URI Open (SAF):          ${TagLibFile.lastOpenContentUriCount} files
+==================================================
+''');
 
       if (!mounted) return;
 

@@ -19,8 +19,14 @@ typedef struct TagLibBridgeFile TagLibBridgeFile;
 // Open a file by file path. Returns NULL if failed.
 FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open(const char* filepath);
 
+// Open a file by file path with audio properties read style (0=Fast, 1=Average, 2=Accurate, 3=None).
+FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_with_style(const char* filepath, int read_style);
+
 // Open a file by File Descriptor (FD). Returns NULL if failed.
 FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_fd(int fd);
+
+// Open a file by File Descriptor (FD) with audio properties read style.
+FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_fd_with_style(int fd, int read_style);
 
 // Save changes to the file. Returns 1 on success, 0 on failure.
 FFI_PLUGIN_EXPORT int taglib_bridge_save(TagLibBridgeFile* file);
