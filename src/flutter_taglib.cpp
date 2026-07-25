@@ -429,11 +429,6 @@ static TagLib::VariantMap build_picture_map(
 extern "C" {
 
 #ifdef __ANDROID__
-JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
-    g_vm = vm;
-    return JNI_VERSION_1_6;
-}
-
 JNIEXPORT void JNICALL Java_com_axel10_flutter_1taglib_FlutterTaglibPlugin_setNativeContext(JNIEnv* env, jobject thiz, jobject context) {
     if (g_context) {
         env->DeleteGlobalRef(g_context);
