@@ -1,3 +1,6 @@
+## 1.5.2
+* readBatchAsync enables image extraction option
+
 ## 1.5.1
 * fix(android): remove dangerous JNI FindClass call in C++ taglib_bridge_open
 
