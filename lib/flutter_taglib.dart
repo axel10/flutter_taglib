@@ -360,7 +360,11 @@ class TagLibFile {
 
   TagLibFile._(this._handle, this.path);
 
-  /// Opens a remote audio file via HTTP/HTTPS URL with range-based stream.
+  /// Opens a remote audio file via HTTP/HTTPS URL with range-based stream synchronously.
+  ///
+  /// **Note**: This is a low-level synchronous API. Accessing property getters on the returned
+  /// [TagLibFile] will trigger synchronous blocking network I/O. If you are calling from the UI
+  /// thread, do NOT use this method; use [readMetadataAsync] instead.
   ///
   /// Metadata and cover art are parsed via HTTP Range Requests without downloading the entire file.
   /// [headers]: optional HTTP headers for authentication (e.g. `{'Authorization': 'Bearer ...'}`).
@@ -405,8 +409,15 @@ class TagLibFile {
 
   /// Opens a remote audio file via HTTP/HTTPS URL asynchronously.
   ///
-  /// Network probing and header reading are performed in a background isolate
-  /// so the calling thread / event loop is never blocked.
+  /// **WARNING / DEPRECATED**: Returning a live [TagLibFile] instance across isolates means that
+  /// subsequent property getters (e.g., `title`, `artist`, `hasCover`, `coverData`) will trigger
+  /// **synchronous blocking network HTTP Range requests** on whichever thread calls them (such as the UI thread).
+  ///
+  /// Use [readMetadataAsync] instead to extract all metadata and cover art fully off the main UI isolate.
+  @Deprecated(
+    'Prone to UI thread blocking when accessing property getters on the returned TagLibFile. '
+    'Use TagLibFile.readMetadataAsync(...) instead for safe, background metadata extraction.',
+  )
   static Future<TagLibFile?> openUrlAsync(
     String url, {
     Map<String, String>? headers,
@@ -435,6 +446,55 @@ class TagLibFile {
     });
     if (address == 0) return null;
     return TagLibFile._(ffi.Pointer.fromAddress(address), url);
+  }
+
+  /// Asynchronously reads and extracts metadata and optional cover art from an audio file or remote HTTP/HTTPS URL.
+  ///
+  /// The entire operation (connecting/opening stream, metadata extraction, optional cover extraction, and closing the native handle)
+  /// is executed completely inside a background isolate. This guarantees that no blocking native FFI or network calls occur on the calling thread.
+  ///
+  /// [headers]: optional HTTP headers for remote URLs (e.g. `{'Authorization': 'Bearer ...'}`).
+  /// [audioPropertiesStyle]: style mode for parsing audio properties (defaults to [TagLibAudioPropertiesStyle.average]).
+  /// [readCover]: whether to extract cover art image bytes (`coverData`). Defaults to `false`.
+  /// [timeout]: network connection/read timeout for remote URLs.
+  static Future<BatchTagMetadata?> readMetadataAsync(
+    String pathOrUrl, {
+    Map<String, String>? headers,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
+    bool readCover = false,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    lastError = null;
+    if (Platform.isWindows || Platform.isLinux) {
+      await prepareDesktopLibrary();
+    }
+    if (Platform.isAndroid) {
+      await _initAndroidNativeContext();
+    }
+    if (!isSupported) {
+      lastError = 'flutter_taglib is not supported or has been disabled on this platform.';
+      throw UnsupportedError(
+        'flutter_taglib is not supported or has been disabled on this platform.',
+      );
+    }
+
+    final resultMap = await Isolate.run(() {
+      return _readSingleFileMetadataMap(
+        pathOrUrl,
+        audioPropertiesStyle.value,
+        readCover,
+        null,
+        headers,
+        timeout.inMilliseconds,
+      );
+    });
+
+    final meta = _mapToBatchTagMetadata(resultMap);
+    if (!meta.success) {
+      lastError = meta.error ?? 'Failed to read metadata for $pathOrUrl';
+      return null;
+    }
+    return meta;
   }
 
   /// Opens an audio file by path.
@@ -754,6 +814,27 @@ class TagLibFile {
     return result;
   }
 
+  static BatchTagMetadata _mapToBatchTagMetadata(Map<String, dynamic> item) {
+    return BatchTagMetadata(
+      path: item['path'] as String,
+      title: (item['title'] as String?) ?? '',
+      artist: (item['artist'] as String?) ?? '',
+      album: (item['album'] as String?) ?? '',
+      genre: (item['genre'] as String?) ?? '',
+      comment: (item['comment'] as String?) ?? '',
+      year: (item['year'] as int?) ?? 0,
+      track: (item['track'] as int?) ?? 0,
+      duration: Duration(milliseconds: (item['durationMs'] as int?) ?? 0),
+      bitrate: (item['bitrate'] as int?) ?? 0,
+      sampleRate: (item['sampleRate'] as int?) ?? 0,
+      channels: (item['channels'] as int?) ?? 0,
+      hasCover: item['hasCover'] == true,
+      coverData: item['coverData'] as Uint8List?,
+      success: item['success'] == true,
+      error: item['error'] as String?,
+    );
+  }
+
   static List<BatchTagMetadata> _buildCombinedBatchResults(
     int totalWorkers,
     Map<int, List<Map<String, dynamic>>> workerResults,
@@ -762,26 +843,7 @@ class TagLibFile {
     for (int id = 0; id < totalWorkers; id++) {
       final list = workerResults[id] ?? [];
       for (final item in list) {
-        combined.add(
-          BatchTagMetadata(
-            path: item['path'] as String,
-            title: (item['title'] as String?) ?? '',
-            artist: (item['artist'] as String?) ?? '',
-            album: (item['album'] as String?) ?? '',
-            genre: (item['genre'] as String?) ?? '',
-            comment: (item['comment'] as String?) ?? '',
-            year: (item['year'] as int?) ?? 0,
-            track: (item['track'] as int?) ?? 0,
-            duration: Duration(milliseconds: (item['durationMs'] as int?) ?? 0),
-            bitrate: (item['bitrate'] as int?) ?? 0,
-            sampleRate: (item['sampleRate'] as int?) ?? 0,
-            channels: (item['channels'] as int?) ?? 0,
-            hasCover: item['hasCover'] == true,
-            coverData: item['coverData'] as Uint8List?,
-            success: item['success'] == true,
-            error: item['error'] as String?,
-          ),
-        );
+        combined.add(_mapToBatchTagMetadata(item));
       }
     }
     return combined;
@@ -1655,17 +1717,23 @@ Map<String, dynamic> _readSingleFileMetadataMap(
   int styleValue,
   bool readCover, [
   String? targetUri,
+  Map<String, String>? headers,
+  int timeoutMs = 15000,
 ]) {
   final openPath = targetUri ?? filePath;
   final pathPtr = openPath.toNativeUtf8();
+  ffi.Pointer<ffi.Char> headersPtr = ffi.nullptr;
+  if (headers != null && headers.isNotEmpty) {
+    headersPtr = jsonEncode(headers).toNativeUtf8().cast<ffi.Char>();
+  }
   try {
     final ffi.Pointer<bindings.TagLibBridgeFile> handle;
     if (openPath.startsWith('http://') || openPath.startsWith('https://')) {
       handle = bindings.taglib_bridge_open_http(
         pathPtr.cast<ffi.Char>(),
-        ffi.nullptr,
+        headersPtr,
         styleValue,
-        15000,
+        timeoutMs,
       );
     } else {
       handle = bindings.taglib_bridge_open_with_style(
@@ -1750,6 +1818,9 @@ Map<String, dynamic> _readSingleFileMetadataMap(
     };
   } finally {
     malloc.free(pathPtr);
+    if (headersPtr != ffi.nullptr) {
+      malloc.free(headersPtr);
+    }
   }
 }
 

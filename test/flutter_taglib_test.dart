@@ -592,14 +592,33 @@ void main() {
       expect(totalBytesServed, lessThan(300 * 1024));
     });
 
-    test('openAsync automatically detects http URL scheme', () async {
+    test('readMetadataAsync reads metadata and cover off-isolate via HTTP Range requests', () async {
       final url = 'http://127.0.0.1:${server.port}/song.flac';
-      final file = await TagLibFile.openAsync(url);
-      expect(file, isNotNull);
-      if (file != null) {
-        expect(file.title, equals('TempleOS Hymn Risen (Remix)'));
-        expect(file.artist, equals('Terry A. Davis'));
-        file.close();
+      final meta = await TagLibFile.readMetadataAsync(
+        url,
+        headers: {'Authorization': 'Bearer test-token'},
+        readCover: true,
+      );
+      expect(meta, isNotNull);
+      if (meta != null) {
+        expect(meta.success, isTrue);
+        expect(meta.title, equals('TempleOS Hymn Risen (Remix)'));
+        expect(meta.artist, equals('Terry A. Davis'));
+        expect(meta.duration.inSeconds, greaterThan(0));
+      }
+    });
+
+    test('readMetadataAsync reads local file metadata and cover', () async {
+      final meta = await TagLibFile.readMetadataAsync(
+        'test/assets/01 TempleOS Hymn Risen (Remix).mp3',
+        readCover: true,
+      );
+      expect(meta, isNotNull);
+      if (meta != null) {
+        expect(meta.success, isTrue);
+        expect(meta.title, isNotEmpty);
+        expect(meta.artist, isNotEmpty);
+        expect(meta.duration.inSeconds, greaterThan(0));
       }
     });
   });
