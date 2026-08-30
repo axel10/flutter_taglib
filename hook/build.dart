@@ -332,13 +332,23 @@ void main(List<String> args) async {
       flags: [
         if (!input.config.code.targetOS.toString().contains('windows'))
           '-fvisibility=hidden',
+        if (targetOSStr == 'macos' || targetOSStr == 'ios') ...[
+          '-x',
+          'objective-c++',
+          '-framework',
+          'Foundation',
+        ],
       ],
       libraries: [
-        if (targetOSStr == 'windows') ...taglibLibraries,
+        if (targetOSStr == 'windows') ...[
+          ...taglibLibraries,
+          'winhttp',
+        ],
         if (input.config.code.targetOS.toString().contains('android') ||
             input.config.code.targetOS.toString().contains('linux'))
           'm',
         if (input.config.code.targetOS.toString().contains('android')) 'log',
+        if (input.config.code.targetOS.toString().contains('linux')) 'curl',
       ],
       libraryDirectories: [if (targetOSStr == 'windows') '.'],
     );

@@ -40,6 +40,15 @@ ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd_with_style(
   return generated.taglib_bridge_open_fd_with_style(fd, readStyle);
 }
 
+ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_http(
+  ffi.Pointer<ffi.Char> url,
+  ffi.Pointer<ffi.Char> headersJson,
+  int readStyle,
+  int timeoutMs,
+) {
+  return generated.taglib_bridge_open_http(url, headersJson, readStyle, timeoutMs);
+}
+
 int taglib_bridge_save(ffi.Pointer<TagLibBridgeFile> file) {
   return generated.taglib_bridge_save(file);
 }

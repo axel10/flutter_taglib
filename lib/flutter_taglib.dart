@@ -360,6 +360,83 @@ class TagLibFile {
 
   TagLibFile._(this._handle, this.path);
 
+  /// Opens a remote audio file via HTTP/HTTPS URL with range-based stream.
+  ///
+  /// Metadata and cover art are parsed via HTTP Range Requests without downloading the entire file.
+  /// [headers]: optional HTTP headers for authentication (e.g. `{'Authorization': 'Bearer ...'}`).
+  /// [timeout]: connection and read timeout.
+  static TagLibFile? openUrl(
+    String url, {
+    Map<String, String>? headers,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
+    Duration timeout = const Duration(seconds: 15),
+  }) {
+    if (!isSupported) {
+      throw UnsupportedError(
+        'flutter_taglib is not supported or has been disabled on this platform.',
+      );
+    }
+    final urlPtr = url.toNativeUtf8();
+    ffi.Pointer<ffi.Char> headersPtr = ffi.nullptr;
+    if (headers != null && headers.isNotEmpty) {
+      headersPtr = jsonEncode(headers).toNativeUtf8().cast<ffi.Char>();
+    }
+    try {
+      final handle = bindings.taglib_bridge_open_http(
+        urlPtr.cast<ffi.Char>(),
+        headersPtr,
+        audioPropertiesStyle.value,
+        timeout.inMilliseconds,
+      );
+      if (handle == ffi.nullptr) {
+        _logger.severe(
+          'Failed to open URL "$url". Check native/platform logs for details.',
+        );
+        return null;
+      }
+      return TagLibFile._(handle, url);
+    } finally {
+      malloc.free(urlPtr);
+      if (headersPtr != ffi.nullptr) {
+        malloc.free(headersPtr);
+      }
+    }
+  }
+
+  /// Opens a remote audio file via HTTP/HTTPS URL asynchronously.
+  ///
+  /// Network probing and header reading are performed in a background isolate
+  /// so the calling thread / event loop is never blocked.
+  static Future<TagLibFile?> openUrlAsync(
+    String url, {
+    Map<String, String>? headers,
+    TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
+    Duration timeout = const Duration(seconds: 15),
+  }) async {
+    lastError = null;
+    if (Platform.isWindows || Platform.isLinux) {
+      await prepareDesktopLibrary();
+    }
+    if (!isSupported) {
+      lastError = 'flutter_taglib is not supported or has been disabled on this platform.';
+      throw UnsupportedError(
+        'flutter_taglib is not supported or has been disabled on this platform.',
+      );
+    }
+    final address = await Isolate.run(() {
+      final file = TagLibFile.openUrl(
+        url,
+        headers: headers,
+        audioPropertiesStyle: audioPropertiesStyle,
+        timeout: timeout,
+      );
+      if (file == null) return 0;
+      return file._handle.address;
+    });
+    if (address == 0) return null;
+    return TagLibFile._(ffi.Pointer.fromAddress(address), url);
+  }
+
   /// Opens an audio file by path.
   ///
   /// Returns `null` if the file could not be opened or is invalid.
@@ -371,6 +448,9 @@ class TagLibFile {
       throw UnsupportedError(
         'flutter_taglib is not supported or has been disabled on this platform.',
       );
+    }
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return openUrl(path, audioPropertiesStyle: audioPropertiesStyle);
     }
     final pathPtr = path.toNativeUtf8();
     try {
@@ -410,6 +490,9 @@ class TagLibFile {
     TagLibAudioPropertiesStyle audioPropertiesStyle = TagLibAudioPropertiesStyle.average,
   }) async {
     lastError = null;
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return openUrlAsync(path, audioPropertiesStyle: audioPropertiesStyle);
+    }
     if (Platform.isWindows || Platform.isLinux) {
       await prepareDesktopLibrary();
     }
@@ -1576,10 +1659,20 @@ Map<String, dynamic> _readSingleFileMetadataMap(
   final openPath = targetUri ?? filePath;
   final pathPtr = openPath.toNativeUtf8();
   try {
-    final handle = bindings.taglib_bridge_open_with_style(
-      pathPtr.cast<ffi.Char>(),
-      styleValue,
-    );
+    final ffi.Pointer<bindings.TagLibBridgeFile> handle;
+    if (openPath.startsWith('http://') || openPath.startsWith('https://')) {
+      handle = bindings.taglib_bridge_open_http(
+        pathPtr.cast<ffi.Char>(),
+        ffi.nullptr,
+        styleValue,
+        15000,
+      );
+    } else {
+      handle = bindings.taglib_bridge_open_with_style(
+        pathPtr.cast<ffi.Char>(),
+        styleValue,
+      );
+    }
     if (handle != ffi.nullptr) {
       final titlePtr = bindings.taglib_bridge_get_title(handle);
       final title = titlePtr != ffi.nullptr ? titlePtr.cast<Utf8>().toDartString() : '';

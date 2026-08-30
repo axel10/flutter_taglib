@@ -35,10 +35,20 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <algorithm>
 #include <cstring>
 #include <cctype>
 #include <typeinfo>
 #include <typeindex>
+
+#if defined(__APPLE__)
+#import <Foundation/Foundation.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#include <winhttp.h>
+#elif !defined(__ANDROID__)
+#include <curl/curl.h>
+#endif
 
 // Itanium ABI toolchains (Android, Apple, Linux) mangle typeid names and need
 // cxxabi.h to demangle them. MSVC-targeting compilers, including clang on
@@ -611,6 +621,821 @@ TagLibBridgeFile* taglib_bridge_open_fd_with_style(int fd, int read_style) {
 
 TagLibBridgeFile* taglib_bridge_open_fd(int fd) {
     return taglib_bridge_open_fd_with_style(fd, 1);
+}
+
+// --- HTTP Range Streaming Support ---
+
+static std::map<std::string, std::string> parse_headers_json(const char* json_str) {
+    std::map<std::string, std::string> headers;
+    if (!json_str || std::strlen(json_str) == 0) return headers;
+
+    const char* p = json_str;
+    while (*p && *p != '{') p++;
+    if (*p == '{') p++;
+
+    while (*p) {
+        while (*p && (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n' || *p == ',')) p++;
+        if (*p == '}' || *p == '\0') break;
+
+        if (*p != '"') break;
+        p++; // skip opening quote
+        std::string key;
+        while (*p && *p != '"') {
+            if (*p == '\\' && *(p + 1)) {
+                p++;
+                if (*p == 'n') key += '\n';
+                else if (*p == 'r') key += '\r';
+                else if (*p == 't') key += '\t';
+                else if (*p == '"') key += '"';
+                else if (*p == '\\') key += '\\';
+                else key += *p;
+            } else {
+                key += *p;
+            }
+            p++;
+        }
+        if (*p == '"') p++; // skip closing quote
+
+        while (*p && (*p == ' ' || *p == '\t')) p++;
+        if (*p != ':') break;
+        p++; // skip colon
+
+        while (*p && (*p == ' ' || *p == '\t')) p++;
+
+        if (*p != '"') break;
+        p++; // skip opening quote
+        std::string val;
+        while (*p && *p != '"') {
+            if (*p == '\\' && *(p + 1)) {
+                p++;
+                if (*p == 'n') val += '\n';
+                else if (*p == 'r') val += '\r';
+                else if (*p == 't') val += '\t';
+                else if (*p == '"') val += '"';
+                else if (*p == '\\') val += '\\';
+                else val += *p;
+            } else {
+                val += *p;
+            }
+            p++;
+        }
+        if (*p == '"') p++; // skip closing quote
+
+        if (!key.empty()) {
+            headers[key] = val;
+        }
+    }
+    return headers;
+}
+
+#if defined(__APPLE__)
+static bool apple_fetch_http_range(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    int64_t offset,
+    int64_t length,
+    int timeout_ms,
+    int64_t& out_total_length,
+    std::vector<uint8_t>& out_data,
+    std::string& out_error
+) {
+    @autoreleasepool {
+        NSString* urlStr = [NSString stringWithUTF8String:url.c_str()];
+        if (!urlStr) {
+            out_error = "Invalid UTF-8 URL";
+            return false;
+        }
+        NSURL* nsUrl = [NSURL URLWithString:urlStr];
+        if (!nsUrl) {
+            out_error = "Invalid URL";
+            return false;
+        }
+
+        NSMutableURLRequest* request = [NSMutableURLRequest requestWithURL:nsUrl];
+        [request setHTTPMethod:@"GET"];
+        [request setTimeoutInterval:(timeout_ms > 0 ? (timeout_ms / 1000.0) : 15.0)];
+
+        if (offset >= 0 && length > 0) {
+            int64_t end = offset + length - 1;
+            NSString* rangeVal = [NSString stringWithFormat:@"bytes=%lld-%lld", (long long)offset, (long long)end];
+            [request setValue:rangeVal forHTTPHeaderField:@"Range"];
+        }
+
+        for (const auto& kv : headers) {
+            NSString* k = [NSString stringWithUTF8String:kv.first.c_str()];
+            NSString* v = [NSString stringWithUTF8String:kv.second.c_str()];
+            if (k && v) {
+                [request setValue:v forHTTPHeaderField:k];
+            }
+        }
+
+        dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+        __block NSData* resData = nil;
+        __block NSInteger statusCode = 0;
+        __block int64_t parsedTotalLength = -1;
+        __block int64_t expectedContentLength = -1;
+        __block NSString* errDesc = nil;
+
+        NSURLSession* session = [NSURLSession sharedSession];
+        NSURLSessionDataTask* task = [session dataTaskWithRequest:request completionHandler:^(NSData* data, NSURLResponse* response, NSError* error) {
+            if (error) {
+                errDesc = [error localizedDescription];
+            }
+            if ([response isKindOfClass:[NSHTTPURLResponse class]]) {
+                NSHTTPURLResponse* httpRes = (NSHTTPURLResponse*)response;
+                statusCode = [httpRes statusCode];
+                expectedContentLength = [httpRes expectedContentLength];
+
+                NSDictionary* allHeaders = [httpRes allHeaderFields];
+                NSString* contentRange = [allHeaders objectForKey:@"Content-Range"];
+                if (!contentRange) contentRange = [allHeaders objectForKey:@"content-range"];
+                if (contentRange) {
+                    NSRange slashRange = [contentRange rangeOfString:@"/"];
+                    if (slashRange.location != NSNotFound) {
+                        NSString* totalStr = [contentRange substringFromIndex:slashRange.location + 1];
+                        totalStr = [totalStr stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                        if (![totalStr isEqualToString:@"*"]) {
+                            parsedTotalLength = [totalStr longLongValue];
+                        }
+                    }
+                }
+            }
+            if (data) {
+                resData = [data copy];
+            }
+            dispatch_semaphore_signal(sema);
+        }];
+        [task resume];
+
+        long timeoutWait = dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)((timeout_ms > 0 ? timeout_ms : 15000) * NSEC_PER_MSEC)));
+
+        if (timeoutWait != 0) {
+            [task cancel];
+            out_error = "HTTP request timed out";
+            return false;
+        }
+        if (errDesc) {
+            out_error = [errDesc UTF8String];
+            return false;
+        }
+        if (statusCode != 200 && statusCode != 206) {
+            out_error = "HTTP status " + std::to_string(statusCode);
+            return false;
+        }
+
+        if (parsedTotalLength > 0) {
+            out_total_length = parsedTotalLength;
+        } else if (expectedContentLength > 0 && statusCode == 200) {
+            out_total_length = expectedContentLength;
+        }
+
+        if (resData && [resData length] > 0) {
+            const uint8_t* bytes = (const uint8_t*)[resData bytes];
+            out_data.assign(bytes, bytes + [resData length]);
+        }
+        return true;
+    }
+}
+#endif
+
+#ifdef __ANDROID__
+static bool android_fetch_http_range(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    int64_t offset,
+    int64_t length,
+    int timeout_ms,
+    int64_t& out_total_length,
+    std::vector<uint8_t>& out_data,
+    std::string& out_error
+) {
+    JNIEnv* env = get_jni_env();
+    if (!env) {
+        out_error = "JNI env is null";
+        return false;
+    }
+
+    jclass urlClass = env->FindClass("java/net/URL");
+    if (!urlClass) {
+        check_and_clear_jni_exception(env, "android_fetch_http_range: FindClass URL");
+        out_error = "FindClass URL failed";
+        return false;
+    }
+
+    jmethodID urlCtor = env->GetMethodID(urlClass, "<init>", "(Ljava/lang/String;)V");
+    jmethodID openConnMethod = env->GetMethodID(urlClass, "openConnection", "()Ljava/net/URLConnection;");
+
+    jstring jUrlStr = env->NewStringUTF(url.c_str());
+    jobject jUrl = env->NewObject(urlClass, urlCtor, jUrlStr);
+    env->DeleteLocalRef(jUrlStr);
+
+    if (!jUrl) {
+        check_and_clear_jni_exception(env, "android_fetch_http_range: URL init");
+        env->DeleteLocalRef(urlClass);
+        out_error = "Failed to create java.net.URL";
+        return false;
+    }
+
+    jobject jConn = env->CallObjectMethod(jUrl, openConnMethod);
+    env->DeleteLocalRef(jUrl);
+    env->DeleteLocalRef(urlClass);
+
+    if (!jConn) {
+        check_and_clear_jni_exception(env, "android_fetch_http_range: openConnection");
+        out_error = "Failed to open connection";
+        return false;
+    }
+
+    jclass connClass = env->GetObjectClass(jConn);
+    jmethodID setReqPropMethod = env->GetMethodID(connClass, "setRequestProperty", "(Ljava/lang/String;Ljava/lang/String;)V");
+    jmethodID setConnTimeoutMethod = env->GetMethodID(connClass, "setConnectTimeout", "(I)V");
+    jmethodID setReadTimeoutMethod = env->GetMethodID(connClass, "setReadTimeout", "(I)V");
+    jmethodID getRespCodeMethod = env->GetMethodID(connClass, "getResponseCode", "()I");
+    jmethodID getHeaderFieldMethod = env->GetMethodID(connClass, "getHeaderField", "(Ljava/lang/String;)Ljava/lang/String;");
+    jmethodID getInputStreamMethod = env->GetMethodID(connClass, "getInputStream", "()Ljava/io/InputStream;");
+    jmethodID disconnectMethod = env->GetMethodID(connClass, "disconnect", "()V");
+
+    int timeout = timeout_ms > 0 ? timeout_ms : 15000;
+    env->CallVoidMethod(jConn, setConnTimeoutMethod, timeout);
+    env->CallVoidMethod(jConn, setReadTimeoutMethod, timeout);
+
+    if (offset >= 0 && length > 0) {
+        char rangeBuf[64];
+        snprintf(rangeBuf, sizeof(rangeBuf), "bytes=%lld-%lld", (long long)offset, (long long)(offset + length - 1));
+        jstring jRangeKey = env->NewStringUTF("Range");
+        jstring jRangeVal = env->NewStringUTF(rangeBuf);
+        env->CallVoidMethod(jConn, setReqPropMethod, jRangeKey, jRangeVal);
+        env->DeleteLocalRef(jRangeKey);
+        env->DeleteLocalRef(jRangeVal);
+    }
+
+    for (const auto& kv : headers) {
+        jstring jKey = env->NewStringUTF(kv.first.c_str());
+        jstring jVal = env->NewStringUTF(kv.second.c_str());
+        env->CallVoidMethod(jConn, setReqPropMethod, jKey, jVal);
+        env->DeleteLocalRef(jKey);
+        env->DeleteLocalRef(jVal);
+    }
+
+    jint respCode = env->CallIntMethod(jConn, getRespCodeMethod);
+    if (env->ExceptionCheck()) {
+        check_and_clear_jni_exception(env, "android_fetch_http_range: getResponseCode");
+        env->DeleteLocalRef(connClass);
+        env->DeleteLocalRef(jConn);
+        out_error = "Connection exception";
+        return false;
+    }
+
+    if (respCode != 200 && respCode != 206) {
+        if (disconnectMethod) env->CallVoidMethod(jConn, disconnectMethod);
+        env->DeleteLocalRef(connClass);
+        env->DeleteLocalRef(jConn);
+        out_error = "HTTP status " + std::to_string(respCode);
+        return false;
+    }
+
+    jstring jCrKey = env->NewStringUTF("Content-Range");
+    jstring jCrVal = (jstring)env->CallObjectMethod(jConn, getHeaderFieldMethod, jCrKey);
+    env->DeleteLocalRef(jCrKey);
+    if (jCrVal) {
+        const char* crStr = env->GetStringUTFChars(jCrVal, nullptr);
+        if (crStr) {
+            const char* slash = strchr(crStr, '/');
+            if (slash && *(slash + 1) != '*' && *(slash + 1) != '\0') {
+                out_total_length = strtoll(slash + 1, nullptr, 10);
+            }
+            env->ReleaseStringUTFChars(jCrVal, crStr);
+        }
+        env->DeleteLocalRef(jCrVal);
+    }
+
+    if (out_total_length <= 0) {
+        jstring jClKey = env->NewStringUTF("Content-Length");
+        jstring jClVal = (jstring)env->CallObjectMethod(jConn, getHeaderFieldMethod, jClKey);
+        env->DeleteLocalRef(jClKey);
+        if (jClVal) {
+            const char* clStr = env->GetStringUTFChars(jClVal, nullptr);
+            if (clStr && respCode == 200) {
+                out_total_length = strtoll(clStr, nullptr, 10);
+            }
+            if (clStr) env->ReleaseStringUTFChars(jClVal, clStr);
+            env->DeleteLocalRef(jClVal);
+        }
+    }
+
+    jobject jInStream = env->CallObjectMethod(jConn, getInputStreamMethod);
+    if (!jInStream || env->ExceptionCheck()) {
+        check_and_clear_jni_exception(env, "android_fetch_http_range: getInputStream");
+        if (disconnectMethod) env->CallVoidMethod(jConn, disconnectMethod);
+        env->DeleteLocalRef(connClass);
+        env->DeleteLocalRef(jConn);
+        out_error = "Failed to get InputStream";
+        return false;
+    }
+
+    jclass inStreamClass = env->GetObjectClass(jInStream);
+    jmethodID readMethod = env->GetMethodID(inStreamClass, "read", "([BII)I");
+    jmethodID closeInMethod = env->GetMethodID(inStreamClass, "close", "()V");
+
+    const int chunkBufSize = 16384;
+    jbyteArray jChunk = env->NewByteArray(chunkBufSize);
+
+    while (true) {
+        jint bytesRead = env->CallIntMethod(jInStream, readMethod, jChunk, 0, chunkBufSize);
+        if (bytesRead <= 0) break;
+
+        jbyte* chunkBytes = env->GetByteArrayElements(jChunk, nullptr);
+        out_data.insert(out_data.end(), (const uint8_t*)chunkBytes, (const uint8_t*)chunkBytes + bytesRead);
+        env->ReleaseByteArrayElements(jChunk, chunkBytes, JNI_ABORT);
+    }
+
+    env->DeleteLocalRef(jChunk);
+    env->CallVoidMethod(jInStream, closeInMethod);
+    env->DeleteLocalRef(jInStream);
+    env->DeleteLocalRef(inStreamClass);
+
+    if (disconnectMethod) {
+        env->CallVoidMethod(jConn, disconnectMethod);
+    }
+    env->DeleteLocalRef(connClass);
+    env->DeleteLocalRef(jConn);
+
+    return true;
+}
+#endif
+
+#ifdef _WIN32
+static bool windows_fetch_http_range(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    int64_t offset,
+    int64_t length,
+    int timeout_ms,
+    int64_t& out_total_length,
+    std::vector<uint8_t>& out_data,
+    std::string& out_error
+) {
+    int timeout = timeout_ms > 0 ? timeout_ms : 15000;
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, NULL, 0);
+    if (wlen <= 0) { out_error = "Invalid UTF-8 URL"; return false; }
+    std::wstring wUrl(wlen, 0);
+    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wUrl[0], wlen);
+
+    URL_COMPONENTS urlComp = { 0 };
+    urlComp.dwStructSize = sizeof(urlComp);
+    urlComp.dwSchemeLength = (DWORD)-1;
+    urlComp.dwHostNameLength = (DWORD)-1;
+    urlComp.dwUrlPathLength = (DWORD)-1;
+    urlComp.dwExtraInfoLength = (DWORD)-1;
+
+    if (!WinHttpCrackUrl(wUrl.c_str(), (DWORD)wcslen(wUrl.c_str()), 0, &urlComp)) {
+        out_error = "WinHttpCrackUrl failed";
+        return false;
+    }
+
+    std::wstring host(urlComp.lpszHostName, urlComp.dwHostNameLength);
+    std::wstring path(urlComp.lpszUrlPath, urlComp.dwUrlPathLength + urlComp.dwExtraInfoLength);
+    bool isHttps = (urlComp.nScheme == INTERNET_SCHEME_HTTPS);
+
+    HINTERNET hSession = WinHttpOpen(L"flutter_taglib/1.0",
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        out_error = "WinHttpOpen failed";
+        return false;
+    }
+
+    WinHttpSetTimeouts(hSession, timeout, timeout, timeout, timeout);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, host.c_str(), urlComp.nPort, 0);
+    if (!hConnect) {
+        WinHttpCloseHandle(hSession);
+        out_error = "WinHttpConnect failed";
+        return false;
+    }
+
+    DWORD flags = isHttps ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", path.c_str(),
+        NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+    if (!hRequest) {
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        out_error = "WinHttpOpenRequest failed";
+        return false;
+    }
+
+    if (offset >= 0 && length > 0) {
+        wchar_t rangeBuf[128];
+        swprintf_s(rangeBuf, 128, L"Range: bytes=%lld-%lld\r\n", (long long)offset, (long long)(offset + length - 1));
+        WinHttpAddRequestHeaders(hRequest, rangeBuf, (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+    }
+
+    for (const auto& kv : headers) {
+        int klen = MultiByteToWideChar(CP_UTF8, 0, kv.first.c_str(), -1, NULL, 0);
+        int vlen = MultiByteToWideChar(CP_UTF8, 0, kv.second.c_str(), -1, NULL, 0);
+        std::wstring wk(klen, 0), wv(vlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, kv.first.c_str(), -1, &wk[0], klen);
+        MultiByteToWideChar(CP_UTF8, 0, kv.second.c_str(), -1, &wv[0], vlen);
+        std::wstring wHeader = wk.c_str() + std::wstring(L": ") + wv.c_str() + L"\r\n";
+        WinHttpAddRequestHeaders(hRequest, wHeader.c_str(), (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD | WINHTTP_ADDREQ_FLAG_REPLACE);
+    }
+
+    if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL)) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        out_error = "WinHttpSendRequest or ReceiveResponse failed";
+        return false;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+        WINHTTP_HEADER_NAME_BY_INDEX, &statusCode, &statusSize, WINHTTP_NO_HEADER_INDEX);
+
+    if (statusCode != 200 && statusCode != 206) {
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        out_error = "HTTP status " + std::to_string(statusCode);
+        return false;
+    }
+
+    DWORD crLen = 0;
+    WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CUSTOM, L"Content-Range", NULL, &crLen, WINHTTP_NO_HEADER_INDEX);
+    if (GetLastError() == ERROR_INSUFFICIENT_BUFFER && crLen > 0) {
+        std::wstring crStr(crLen / sizeof(wchar_t), 0);
+        if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CUSTOM, L"Content-Range", &crStr[0], &crLen, WINHTTP_NO_HEADER_INDEX)) {
+            size_t slash = crStr.find(L'/');
+            if (slash != std::wstring::npos && slash + 1 < crStr.size() && crStr[slash + 1] != L'*') {
+                out_total_length = _wcstoi64(crStr.c_str() + slash + 1, NULL, 10);
+            }
+        }
+    }
+
+    if (out_total_length <= 0 && statusCode == 200) {
+        DWORD clLen = 0;
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+            WINHTTP_HEADER_NAME_BY_INDEX, &clLen, &statusSize, WINHTTP_NO_HEADER_INDEX);
+        out_total_length = clLen;
+    }
+
+    DWORD bytesAvailable = 0;
+    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0) {
+        size_t currentSize = out_data.size();
+        out_data.resize(currentSize + bytesAvailable);
+        DWORD bytesRead = 0;
+        if (!WinHttpReadData(hRequest, &out_data[currentSize], bytesAvailable, &bytesRead)) {
+            out_data.resize(currentSize);
+            break;
+        }
+        out_data.resize(currentSize + bytesRead);
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+    return true;
+}
+#endif
+
+#if !defined(__APPLE__) && !defined(__ANDROID__) && !defined(_WIN32)
+static size_t curl_write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+    size_t total = size * nmemb;
+    std::vector<uint8_t>* vec = static_cast<std::vector<uint8_t>*>(userp);
+    vec->insert(vec->end(), static_cast<const uint8_t*>(contents), static_cast<const uint8_t*>(contents) + total);
+    return total;
+}
+
+static size_t curl_header_callback(char* buffer, size_t size, size_t nitems, void* userdata) {
+    size_t total = size * nitems;
+    int64_t* totalLength = static_cast<int64_t*>(userdata);
+    std::string header(buffer, total);
+    size_t pos = header.find("Content-Range:");
+    if (pos == std::string::npos) pos = header.find("content-range:");
+    if (pos != std::string::npos) {
+        size_t slash = header.find('/', pos);
+        if (slash != std::string::npos && slash + 1 < header.size()) {
+            std::string num = header.substr(slash + 1);
+            while (!num.empty() && (num.back() == '\r' || num.back() == '\n' || num.back() == ' ')) num.pop_back();
+            if (!num.empty() && num != "*") {
+                *totalLength = std::strtoll(num.c_str(), nullptr, 10);
+            }
+        }
+    }
+    return total;
+}
+
+static bool curl_fetch_http_range(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    int64_t offset,
+    int64_t length,
+    int timeout_ms,
+    int64_t& out_total_length,
+    std::vector<uint8_t>& out_data,
+    std::string& out_error
+) {
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        out_error = "curl_easy_init failed";
+        return false;
+    }
+
+    struct curl_slist* chunk = nullptr;
+    for (const auto& kv : headers) {
+        std::string h = kv.first + ": " + kv.second;
+        chunk = curl_slist_append(chunk, h.c_str());
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)(timeout_ms > 0 ? timeout_ms : 15000));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)(timeout_ms > 0 ? timeout_ms : 15000));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out_data);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, curl_header_callback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, &out_total_length);
+
+    if (chunk) {
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, chunk);
+    }
+
+    if (offset >= 0 && length > 0) {
+        char rangeBuf[64];
+        snprintf(rangeBuf, sizeof(rangeBuf), "%lld-%lld", (long long)offset, (long long)(offset + length - 1));
+        curl_easy_setopt(curl, CURLOPT_RANGE, rangeBuf);
+    }
+
+    CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+    if (chunk) {
+        curl_slist_free_all(chunk);
+    }
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        out_error = curl_easy_strerror(res);
+        return false;
+    }
+    if (http_code != 200 && http_code != 206) {
+        out_error = "HTTP status " + std::to_string(http_code);
+        return false;
+    }
+
+    if (out_total_length <= 0 && http_code == 200) {
+        out_total_length = out_data.size();
+    }
+
+    return true;
+}
+#endif
+
+static bool fetch_http_range(
+    const std::string& url,
+    const std::map<std::string, std::string>& headers,
+    int64_t offset,
+    int64_t length,
+    int timeout_ms,
+    int64_t& out_total_length,
+    std::vector<uint8_t>& out_data,
+    std::string& out_error
+) {
+#if defined(__APPLE__)
+    return apple_fetch_http_range(url, headers, offset, length, timeout_ms, out_total_length, out_data, out_error);
+#elif defined(__ANDROID__)
+    return android_fetch_http_range(url, headers, offset, length, timeout_ms, out_total_length, out_data, out_error);
+#elif defined(_WIN32)
+    return windows_fetch_http_range(url, headers, offset, length, timeout_ms, out_total_length, out_data, out_error);
+#else
+    return curl_fetch_http_range(url, headers, offset, length, timeout_ms, out_total_length, out_data, out_error);
+#endif
+}
+
+class HttpRangeIOStream : public TagLib::IOStream {
+public:
+    static constexpr size_t kBlockSize = 65536; // 64 KB per block
+    static constexpr size_t kMaxCachedBlocks = 24; // ~1.5 MB cache
+
+    HttpRangeIOStream(std::string url, std::map<std::string, std::string> headers, int timeout_ms)
+        : m_url(std::move(url)), m_headers(std::move(headers)), m_timeout_ms(timeout_ms), m_pos(0), m_length(0), m_isOpen(false)
+    {
+        std::vector<uint8_t> block0;
+        std::string err;
+        int64_t totalLen = -1;
+        bool ok = fetch_http_range(m_url, m_headers, 0, kBlockSize, m_timeout_ms, totalLen, block0, err);
+        if (ok && !block0.empty()) {
+            m_isOpen = true;
+            if (totalLen > 0) {
+                m_length = totalLen;
+            } else {
+                m_length = static_cast<int64_t>(block0.size());
+            }
+            put_block(0, std::move(block0));
+        } else {
+            LOGE("HttpRangeIOStream init failed for %s: %s", m_url.c_str(), err.c_str());
+        }
+    }
+
+    ~HttpRangeIOStream() override = default;
+
+    TagLib::FileName name() const override {
+        return m_url.c_str();
+    }
+
+    TagLib::ByteVector readBlock(size_t length) override {
+        if (!m_isOpen || m_pos >= m_length || length == 0) {
+            return TagLib::ByteVector();
+        }
+
+        size_t toRead = length;
+        if (m_pos + static_cast<int64_t>(toRead) > m_length) {
+            toRead = static_cast<size_t>(m_length - m_pos);
+        }
+
+        TagLib::ByteVector result;
+        result.resize(static_cast<unsigned int>(toRead));
+        uint8_t* dest = reinterpret_cast<uint8_t*>(result.data());
+
+        size_t bytesRead = 0;
+        while (bytesRead < toRead) {
+            int64_t currentOffset = m_pos + bytesRead;
+            int64_t blockIndex = currentOffset / kBlockSize;
+            size_t blockOffset = static_cast<size_t>(currentOffset % kBlockSize);
+            size_t bytesFromBlock = std::min(toRead - bytesRead, kBlockSize - blockOffset);
+
+            const std::vector<uint8_t>* blockData = get_or_fetch_block(blockIndex);
+            if (!blockData || blockOffset >= blockData->size()) {
+                break;
+            }
+
+            size_t actualBytesFromBlock = std::min(bytesFromBlock, blockData->size() - blockOffset);
+            std::memcpy(dest + bytesRead, blockData->data() + blockOffset, actualBytesFromBlock);
+            bytesRead += actualBytesFromBlock;
+
+            if (actualBytesFromBlock < bytesFromBlock) {
+                break;
+            }
+        }
+
+        m_pos += bytesRead;
+        if (bytesRead < toRead) {
+            result.resize(static_cast<unsigned int>(bytesRead));
+        }
+        return result;
+    }
+
+    void writeBlock(const TagLib::ByteVector&) override {}
+    void insert(const TagLib::ByteVector&, TagLib::offset_t = 0, size_t = 0) override {}
+    void removeBlock(TagLib::offset_t = 0, size_t = 0) override {}
+
+    bool readOnly() const override {
+        return true;
+    }
+
+    bool isOpen() const override {
+        return m_isOpen;
+    }
+
+    void seek(TagLib::offset_t offset, TagLib::IOStream::Position p = TagLib::IOStream::Beginning) override {
+        if (!m_isOpen) return;
+        switch (p) {
+            case TagLib::IOStream::Beginning:
+                m_pos = offset;
+                break;
+            case TagLib::IOStream::Current:
+                m_pos += offset;
+                break;
+            case TagLib::IOStream::End:
+                m_pos = m_length + offset;
+                break;
+        }
+        if (m_pos < 0) m_pos = 0;
+        if (m_pos > m_length) m_pos = m_length;
+    }
+
+    void clear() override {}
+
+    TagLib::offset_t tell() const override {
+        return m_pos;
+    }
+
+    TagLib::offset_t length() override {
+        return m_length;
+    }
+
+    void truncate(TagLib::offset_t) override {}
+
+private:
+    std::string m_url;
+    std::map<std::string, std::string> m_headers;
+    int m_timeout_ms;
+    int64_t m_pos;
+    int64_t m_length;
+    bool m_isOpen;
+
+    std::unordered_map<int64_t, std::vector<uint8_t>> m_cache;
+    std::vector<int64_t> m_lruOrder;
+
+    void put_block(int64_t blockIndex, std::vector<uint8_t> data) {
+        if (m_cache.find(blockIndex) != m_cache.end()) {
+            m_cache[blockIndex] = std::move(data);
+            touch_lru(blockIndex);
+            return;
+        }
+
+        if (m_cache.size() >= kMaxCachedBlocks) {
+            int64_t oldest = m_lruOrder.front();
+            m_lruOrder.erase(m_lruOrder.begin());
+            m_cache.erase(oldest);
+        }
+
+        m_cache[blockIndex] = std::move(data);
+        m_lruOrder.push_back(blockIndex);
+    }
+
+    void touch_lru(int64_t blockIndex) {
+        auto it = std::find(m_lruOrder.begin(), m_lruOrder.end(), blockIndex);
+        if (it != m_lruOrder.end()) {
+            m_lruOrder.erase(it);
+        }
+        m_lruOrder.push_back(blockIndex);
+    }
+
+    const std::vector<uint8_t>* get_or_fetch_block(int64_t blockIndex) {
+        auto it = m_cache.find(blockIndex);
+        if (it != m_cache.end()) {
+            touch_lru(blockIndex);
+            return &it->second;
+        }
+
+        int64_t startOffset = blockIndex * kBlockSize;
+        if (startOffset >= m_length) {
+            return nullptr;
+        }
+
+        int64_t reqLen = kBlockSize;
+        if (startOffset + reqLen > m_length) {
+            reqLen = m_length - startOffset;
+        }
+
+        std::vector<uint8_t> blockData;
+        int64_t totalLen = -1;
+        std::string err;
+        bool ok = fetch_http_range(m_url, m_headers, startOffset, reqLen, m_timeout_ms, totalLen, blockData, err);
+        if (!ok || blockData.empty()) {
+            LOGE("HttpRangeIOStream fetch block %lld failed: %s", (long long)blockIndex, err.c_str());
+            return nullptr;
+        }
+
+        put_block(blockIndex, std::move(blockData));
+        return &m_cache[blockIndex];
+    }
+};
+
+TagLibBridgeFile* taglib_bridge_open_http(const char* url, const char* headers_json, int read_style, int timeout_ms) {
+    if (!url || std::strlen(url) == 0) {
+        LOGE("taglib_bridge_open_http: url is null or empty");
+        return nullptr;
+    }
+
+    try {
+        std::map<std::string, std::string> headers = parse_headers_json(headers_json);
+        auto stream = new HttpRangeIOStream(url, headers, timeout_ms > 0 ? timeout_ms : 15000);
+        if (!stream->isOpen()) {
+            delete stream;
+            LOGE("taglib_bridge_open_http: stream failed to open for url: %s", url);
+            return nullptr;
+        }
+
+        bool readAudioProps = true;
+        TagLib::AudioProperties::ReadStyle style = TagLib::AudioProperties::Average;
+        resolve_read_style(read_style, readAudioProps, style);
+
+        auto fileRef = new TagLib::FileRef(stream, readAudioProps, style);
+        if (fileRef->isNull()) {
+            delete fileRef;
+            delete stream;
+            LOGE("taglib_bridge_open_http: fileRef is null (invalid format or unreadable stream) for: %s", url);
+            return nullptr;
+        }
+
+        auto bridge = new TagLibBridgeFile();
+        bridge->stream = stream;
+        bridge->fileRef = fileRef;
+        return bridge;
+    } catch (const std::exception& e) {
+        LOGE("taglib_bridge_open_http: std::exception caught for %s: %s", url, e.what());
+        return nullptr;
+    } catch (...) {
+        LOGE("taglib_bridge_open_http: unknown exception caught for %s", url);
+        return nullptr;
+    }
 }
 
 int taglib_bridge_save(TagLibBridgeFile* file) {

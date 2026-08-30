@@ -28,6 +28,12 @@ FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_fd(int fd);
 // Open a file by File Descriptor (FD) with audio properties read style.
 FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_fd_with_style(int fd, int read_style);
 
+// Open a remote file via HTTP/HTTPS URL with range-based stream.
+// headers_json: optional JSON string containing key-value headers, e.g. "{\"Authorization\":\"Bearer xxx\"}" or NULL.
+// read_style: 0=Fast, 1=Average, 2=Accurate, 3=None.
+// timeout_ms: connection and read timeout in milliseconds (e.g. 15000). 0 for default.
+FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_http(const char* url, const char* headers_json, int read_style, int timeout_ms);
+
 // Save changes to the file. Returns 1 on success, 0 on failure.
 FFI_PLUGIN_EXPORT int taglib_bridge_save(TagLibBridgeFile* file);
 

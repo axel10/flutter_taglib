@@ -33,6 +33,22 @@ external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd_with_style(
   int read_style,
 );
 
+/// Open a remote file via HTTP/HTTPS URL with range-based stream.
+@ffi.Native<
+  ffi.Pointer<TagLibBridgeFile> Function(
+    ffi.Pointer<ffi.Char>,
+    ffi.Pointer<ffi.Char>,
+    ffi.Int,
+    ffi.Int,
+  )
+>()
+external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_http(
+  ffi.Pointer<ffi.Char> url,
+  ffi.Pointer<ffi.Char> headers_json,
+  int read_style,
+  int timeout_ms,
+);
+
 /// Save changes to the file. Returns 1 on success, 0 on failure.
 @ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
 external int taglib_bridge_save(ffi.Pointer<TagLibBridgeFile> file);
