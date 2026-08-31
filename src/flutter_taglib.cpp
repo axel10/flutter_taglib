@@ -44,8 +44,12 @@
 #if defined(__APPLE__)
 #import <Foundation/Foundation.h>
 #elif defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <winhttp.h>
+#pragma comment(lib, "winhttp.lib")
 #elif !defined(__ANDROID__)
 #include <curl/curl.h>
 #endif
@@ -622,6 +626,8 @@ TagLibBridgeFile* taglib_bridge_open_fd_with_style(int fd, int read_style) {
 TagLibBridgeFile* taglib_bridge_open_fd(int fd) {
     return taglib_bridge_open_fd_with_style(fd, 1);
 }
+
+} // extern "C"
 
 // --- HTTP Range Streaming Support ---
 
@@ -1462,6 +1468,8 @@ private:
         return &m_cache[blockIndex];
     }
 };
+
+extern "C" {
 
 TagLibBridgeFile* taglib_bridge_open_http(const char* url, const char* headers_json, int read_style, int timeout_ms) {
     if (!url || std::strlen(url) == 0) {
