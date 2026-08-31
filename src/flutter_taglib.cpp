@@ -1159,7 +1159,7 @@ struct CurlWriteContext {
     bool is200;
 };
 
-static size_t curl_write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
+static size_t taglib_curl_write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
     size_t total = size * nmemb;
     auto ctx = static_cast<CurlWriteContext*>(userp);
     if (ctx->is200 && ctx->maxLen > 0 && ctx->vec->size() >= (size_t)ctx->maxLen) {
@@ -1173,7 +1173,7 @@ static size_t curl_write_callback(void* contents, size_t size, size_t nmemb, voi
     return total;
 }
 
-static size_t curl_header_callback(char* buffer, size_t size, size_t nitems, void* userdata) {
+static size_t taglib_curl_header_callback(char* buffer, size_t size, size_t nitems, void* userdata) {
     size_t total = size * nitems;
     int64_t* totalLength = static_cast<int64_t*>(userdata);
     std::string header(buffer, total);
@@ -1220,9 +1220,9 @@ static bool curl_fetch_http_range(
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)(timeout_ms > 0 ? timeout_ms : 15000));
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)(timeout_ms > 0 ? timeout_ms : 15000));
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, taglib_curl_write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &writeCtx);
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, curl_header_callback);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, taglib_curl_header_callback);
     curl_easy_setopt(curl, CURLOPT_HEADERDATA, &out_total_length);
 
     if (chunk) {
