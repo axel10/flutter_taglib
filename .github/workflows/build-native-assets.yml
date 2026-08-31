@@ -19,6 +19,7 @@ on:
   push:
     branches:
       - main
+      - master
     tags:
       - desktop-binaries-v*
       - android-binaries-v*

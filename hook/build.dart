@@ -218,6 +218,21 @@ void main(List<String> args) async {
       includes.addAll(sortedIncludeDirs);
     }
 
+    if (targetOSStr == 'linux') {
+      const linuxIncludeDirs = [
+        '/usr/include',
+        '/usr/include/x86_64-linux-gnu',
+        '/usr/include/aarch64-linux-gnu',
+        '/usr/include/arm-linux-gnueabihf',
+        '/usr/local/include',
+      ];
+      for (final dir in linuxIncludeDirs) {
+        if (Directory(dir).existsSync()) {
+          includes.add(dir);
+        }
+      }
+    }
+
     if (targetOSStr == 'windows') {
       final flattenedIncludeDir = Directory(
         '${cacheDir.path}/taglib_flattened_headers',
