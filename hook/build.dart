@@ -6,7 +6,7 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 import 'package:logging/logging.dart';
 import 'package:hooks/hooks.dart';
 
-const String _prebuiltReleaseTag = 'desktop-binaries-v1.5.1';
+const String _prebuiltReleaseTag = 'desktop-binaries-v1.6.0';
 const String _githubDownloadBaseUrl =
     'https://github.com/axel10/flutter_taglib/releases/download/$_prebuiltReleaseTag';
 
@@ -45,7 +45,7 @@ void main(List<String> args) async {
             : 'libflutter_taglib_native.so';
 
         final cacheDir = Directory.fromUri(
-          input.packageRoot.resolve('.dart_tool/flutter_taglib/prebuilt/'),
+          input.packageRoot.resolve('.dart_tool/flutter_taglib/prebuilt/$_prebuiltReleaseTag/'),
         );
         if (!cacheDir.existsSync()) {
           cacheDir.createSync(recursive: true);
@@ -95,7 +95,7 @@ void main(List<String> args) async {
         final localFileName = 'libflutter_taglib_native.so';
 
         final cacheDir = Directory.fromUri(
-          input.packageRoot.resolve('.dart_tool/flutter_taglib/prebuilt/'),
+          input.packageRoot.resolve('.dart_tool/flutter_taglib/prebuilt/$_prebuiltReleaseTag/'),
         );
         if (!cacheDir.existsSync()) {
           cacheDir.createSync(recursive: true);

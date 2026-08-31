@@ -9,7 +9,7 @@ on:
       version:
         description: Release version used in artifact names and optional release tag
         required: true
-        default: 1.2.0
+        default: 1.6.0
         type: string
       publish_release:
         description: Publish assets to a GitHub Release
