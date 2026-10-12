@@ -15,8 +15,10 @@ external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open(
   ffi.Pointer<ffi.Char> filepath,
 );
 
-/// Open a file by file path with audio properties read style option (0=Fast, 1=Average, 2=Accurate, 3=None).
-@ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Pointer<ffi.Char>, ffi.Int)>()
+/// Open a file by file path with audio properties read style (0=Fast, 1=Average, 2=Accurate, 3=None).
+@ffi.Native<
+  ffi.Pointer<TagLibBridgeFile> Function(ffi.Pointer<ffi.Char>, ffi.Int)
+>()
 external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_with_style(
   ffi.Pointer<ffi.Char> filepath,
   int read_style,
@@ -26,7 +28,7 @@ external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_with_style(
 @ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Int)>()
 external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd(int fd);
 
-/// Open a file by File Descriptor (FD) with audio properties read style option.
+/// Open a file by File Descriptor (FD) with audio properties read style.
 @ffi.Native<ffi.Pointer<TagLibBridgeFile> Function(ffi.Int, ffi.Int)>()
 external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd_with_style(
   int fd,
@@ -34,6 +36,9 @@ external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_fd_with_style(
 );
 
 /// Open a remote file via HTTP/HTTPS URL with range-based stream.
+/// headers_json: optional JSON string containing key-value headers, e.g. "{\"Authorization\":\"Bearer xxx\"}" or NULL.
+/// read_style: 0=Fast, 1=Average, 2=Accurate, 3=None.
+/// timeout_ms: connection and read timeout in milliseconds (e.g. 15000). 0 for default.
 @ffi.Native<
   ffi.Pointer<TagLibBridgeFile> Function(
     ffi.Pointer<ffi.Char>,
@@ -89,6 +94,9 @@ external int taglib_bridge_get_year(ffi.Pointer<TagLibBridgeFile> file);
 
 @ffi.Native<ffi.Uint32 Function(ffi.Pointer<TagLibBridgeFile>)>()
 external int taglib_bridge_get_track(ffi.Pointer<TagLibBridgeFile> file);
+
+@ffi.Native<ffi.Uint32 Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_get_rating(ffi.Pointer<TagLibBridgeFile> file);
 
 /// Write string properties
 @ffi.Native<
@@ -162,8 +170,6 @@ external ffi.Pointer<ffi.Char> taglib_bridge_get_bitrate_mode(
   ffi.Pointer<TagLibBridgeFile> file,
 );
 
-/// Audio format detected from the file contents (e.g. "MP3", "FLAC", "OPUS", "AAC").
-/// Returns NULL when the format could not be determined.
 @ffi.Native<ffi.Pointer<ffi.Char> Function(ffi.Pointer<TagLibBridgeFile>)>()
 external ffi.Pointer<ffi.Char> taglib_bridge_get_format(
   ffi.Pointer<TagLibBridgeFile> file,

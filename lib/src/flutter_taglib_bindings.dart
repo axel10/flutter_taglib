@@ -95,6 +95,10 @@ int taglib_bridge_get_track(ffi.Pointer<TagLibBridgeFile> file) {
   return generated.taglib_bridge_get_track(file);
 }
 
+int taglib_bridge_get_rating(ffi.Pointer<TagLibBridgeFile> file) {
+  return generated.taglib_bridge_get_rating(file);
+}
+
 void taglib_bridge_set_title(
   ffi.Pointer<TagLibBridgeFile> file,
   ffi.Pointer<ffi.Char> title,

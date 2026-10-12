@@ -30,7 +30,15 @@
 #include <it/itfile.h>
 #include <xm/xmfile.h>
 #include <tpropertymap.h>
+#include <id3v2tag.h>
+#include <popularimeterframe.h>
+#include <textidentificationframe.h>
+#include <mp4tag.h>
+#include <mp4item.h>
+#include <asftag.h>
+#include <asfattribute.h>
 
+#include <cmath>
 #include <string>
 #include <vector>
 #include <map>
@@ -286,6 +294,9 @@ struct TagLibBridgeFile {
 
     TagLib::ByteVector cachedFrontCover;
 
+    int cachedRating = -1;
+    bool ratingResolved = false;
+
     void invalidateCaches() {
         formatResolved = false;
         losslessResolved = false;
@@ -293,6 +304,8 @@ struct TagLibBridgeFile {
         cachedBitDepth = 0;
         hasCoverResolved = false;
         cachedFrontCover = TagLib::ByteVector();
+        ratingResolved = false;
+        cachedRating = -1;
     }
 };
 
@@ -1634,6 +1647,183 @@ uint32_t taglib_bridge_get_track(TagLibBridgeFile* file) {
     if (!file || !file->fileRef || file->fileRef->isNull() || !file->fileRef->tag()) return 0;
     try {
         return file->fileRef->tag()->track();
+    } catch (...) {
+        return 0;
+    }
+}
+
+static int popm_to_stars(int raw) {
+    if (raw <= 0) return 0;
+    if (raw <= 31) return 1;
+    if (raw <= 95) return 2;
+    if (raw <= 159) return 3;
+    if (raw <= 223) return 4;
+    return 5;
+}
+
+static int parse_rating_string(const std::string& input) {
+    size_t first = input.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return 0;
+    size_t last = input.find_last_not_of(" \t\r\n");
+    std::string s = input.substr(first, (last - first + 1));
+    if (s.empty()) return 0;
+
+    size_t slash = s.find('/');
+    if (slash != std::string::npos) {
+        try {
+            double num = std::stod(s.substr(0, slash));
+            double den = std::stod(s.substr(slash + 1));
+            if (den > 0.0 && num > 0.0) {
+                int stars = static_cast<int>(std::round((num / den) * 5.0));
+                return std::max(1, std::min(5, stars));
+            }
+        } catch (...) {}
+    }
+
+    try {
+        double val = std::stod(s);
+        if (val <= 0.0) return 0;
+        if (val <= 1.0) {
+            int stars = static_cast<int>(std::round(val * 5.0));
+            return std::max(1, std::min(5, stars));
+        }
+        if (val <= 5.0) {
+            int stars = static_cast<int>(std::round(val));
+            return std::max(1, std::min(5, stars));
+        }
+        if (val <= 100.0) {
+            int stars = (static_cast<int>(val) + 10) / 20;
+            return std::max(1, std::min(5, stars));
+        }
+        if (val <= 255.0) {
+            return popm_to_stars(static_cast<int>(std::round(val)));
+        }
+    } catch (...) {
+        if (s == "*") return 1;
+        if (s == "**") return 2;
+        if (s == "***") return 3;
+        if (s == "****") return 4;
+        if (s == "*****") return 5;
+    }
+    return 0;
+}
+
+static int extract_file_rating(TagLibBridgeFile* file) {
+    if (!file || !file->fileRef || file->fileRef->isNull()) return 0;
+
+    TagLib::File* filePtr = file->fileRef->file();
+    if (!filePtr) return 0;
+
+    // 1. Check for ID3v2 POPM frames (MP3, WAV, AIFF, TrueAudio, FLAC with ID3v2)
+    TagLib::ID3v2::Tag* id3v2Tag = nullptr;
+    if (auto* mpeg = dynamic_cast<TagLib::MPEG::File*>(filePtr)) {
+        id3v2Tag = mpeg->ID3v2Tag(false);
+    } else if (auto* wav = dynamic_cast<TagLib::RIFF::WAV::File*>(filePtr)) {
+        id3v2Tag = wav->ID3v2Tag();
+    } else if (auto* aiff = dynamic_cast<TagLib::RIFF::AIFF::File*>(filePtr)) {
+        id3v2Tag = aiff->tag();
+    } else if (auto* trueAudio = dynamic_cast<TagLib::TrueAudio::File*>(filePtr)) {
+        id3v2Tag = trueAudio->ID3v2Tag(false);
+    } else if (auto* flac = dynamic_cast<TagLib::FLAC::File*>(filePtr)) {
+        id3v2Tag = flac->ID3v2Tag(false);
+    }
+
+    if (id3v2Tag) {
+        int maxPopm = 0;
+        const auto& popmFrames = id3v2Tag->frameList("POPM");
+        for (auto* frame : popmFrames) {
+            if (auto* popm = dynamic_cast<TagLib::ID3v2::PopularimeterFrame*>(frame)) {
+                int r = popm->rating();
+                if (r > maxPopm) maxPopm = r;
+            }
+        }
+        const auto& popFrames = id3v2Tag->frameList("POP");
+        for (auto* frame : popFrames) {
+            if (auto* popm = dynamic_cast<TagLib::ID3v2::PopularimeterFrame*>(frame)) {
+                int r = popm->rating();
+                if (r > maxPopm) maxPopm = r;
+            }
+        }
+        if (maxPopm > 0) {
+            return popm_to_stars(maxPopm);
+        }
+    }
+
+    // 2. Check MP4 "rate" atom or items
+    if (auto* mp4File = dynamic_cast<TagLib::MP4::File*>(filePtr)) {
+        if (auto* mp4Tag = mp4File->tag()) {
+            if (mp4Tag->contains("rate")) {
+                int rateVal = mp4Tag->item("rate").toInt();
+                if (rateVal > 0) {
+                    if (rateVal <= 5) return rateVal;
+                    int r = parse_rating_string(std::to_string(rateVal));
+                    if (r > 0) return r;
+                }
+            }
+            if (mp4Tag->contains("----:com.apple.iTunes:RATING")) {
+                auto valList = mp4Tag->item("----:com.apple.iTunes:RATING").toStringList();
+                if (!valList.isEmpty()) {
+                    int r = parse_rating_string(valList.front().to8Bit(true));
+                    if (r > 0) return r;
+                }
+            }
+        }
+    }
+
+    // 3. Check ASF/WMA "WM/SharedUserRating" or "SharedUserRating"
+    if (auto* asfFile = dynamic_cast<TagLib::ASF::File*>(filePtr)) {
+        if (auto* asfTag = asfFile->tag()) {
+            const auto& attrs = asfTag->attributeListMap();
+            auto it = attrs.find("WM/SharedUserRating");
+            if (it != attrs.end() && !it->second.isEmpty()) {
+                int val = static_cast<int>(it->second.front().toUInt());
+                if (val > 0) {
+                    if (val <= 24) return 1;
+                    if (val <= 49) return 2;
+                    if (val <= 74) return 3;
+                    if (val <= 98) return 4;
+                    return 5;
+                }
+            }
+            it = attrs.find("SharedUserRating");
+            if (it != attrs.end() && !it->second.isEmpty()) {
+                int val = static_cast<int>(it->second.front().toUInt());
+                if (val > 0) {
+                    if (val <= 24) return 1;
+                    if (val <= 49) return 2;
+                    if (val <= 74) return 3;
+                    if (val <= 98) return 4;
+                    return 5;
+                }
+            }
+        }
+    }
+
+    // 4. Check unified PropertyMap (Vorbis comment in FLAC/OGG/Opus, APE tags, TXXX in ID3v2, etc.)
+    try {
+        TagLib::PropertyMap props = filePtr->properties();
+        for (auto it = props.begin(); it != props.end(); ++it) {
+            std::string k = it->first.upper().to8Bit(true);
+            if ((k == "RATING" || k == "WM/SHAREDUSERRATING" || k == "SHAREDUSERRATING" ||
+                 k == "RATE" || k == "MUSICBEE RATING" || k.rfind("RATING:", 0) == 0) &&
+                !it->second.isEmpty()) {
+                std::string val = it->second.front().to8Bit(true);
+                int stars = parse_rating_string(val);
+                if (stars > 0) return stars;
+            }
+        }
+    } catch (...) {}
+
+    return 0;
+}
+
+uint32_t taglib_bridge_get_rating(TagLibBridgeFile* file) {
+    if (!file || !file->fileRef || file->fileRef->isNull()) return 0;
+    if (file->ratingResolved) return file->cachedRating >= 0 ? static_cast<uint32_t>(file->cachedRating) : 0;
+    try {
+        file->cachedRating = extract_file_rating(file);
+        file->ratingResolved = true;
+        return static_cast<uint32_t>(file->cachedRating);
     } catch (...) {
         return 0;
     }

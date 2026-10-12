@@ -483,6 +483,66 @@ void main() {
       file2.close();
     });
 
+    test('Read, write and read back rating via properties and TagLibFile.rating', () {
+      final tempFlac = File('${tempDir.path}/temp_test.flac');
+      File('test/assets/01 TempleOS Hymn Risen (Remix).flac').copySync(tempFlac.path);
+
+      final file = TagLibFile.open(tempFlac.path);
+      expect(file, isNotNull);
+      expect(file!.rating, equals(0)); // Initially unrated
+
+      // Set rating as '4' (out of 5 stars)
+      file.setProperties({
+        TagProperties.rating: ['4'],
+      });
+      final saved = file.save();
+      expect(saved, isTrue);
+      file.close();
+
+      // Re-open and verify file.rating returns 4
+      final file2 = TagLibFile.open(tempFlac.path);
+      expect(file2, isNotNull);
+      expect(file2!.rating, equals(4));
+      file2.close();
+
+      // Test rating percentage '80' -> 4 stars
+      final file3 = TagLibFile.open(tempFlac.path);
+      file3!.setProperties({
+        TagProperties.rating: ['80'],
+      });
+      file3.save();
+      file3.close();
+
+      final file4 = TagLibFile.open(tempFlac.path);
+      expect(file4!.rating, equals(4));
+      file4.close();
+
+      // Test rating fractional '1.0' -> 5 stars
+      final file5 = TagLibFile.open(tempFlac.path);
+      file5!.setProperties({
+        TagProperties.rating: ['1.0'],
+      });
+      file5.save();
+      file5.close();
+
+      final file6 = TagLibFile.open(tempFlac.path);
+      expect(file6!.rating, equals(5));
+      file6.close();
+
+      // Test MP3 TXXX rating
+      final mp3File = TagLibFile.open(tempFile.path);
+      expect(mp3File, isNotNull);
+      mp3File!.setProperties({
+        TagProperties.rating: ['4/5'],
+      });
+      mp3File.save();
+      mp3File.close();
+
+      final mp3File2 = TagLibFile.open(tempFile.path);
+      expect(mp3File2!.rating, equals(4));
+      mp3File2.close();
+    });
+
     test('Batch read with auto isolate count (readBatchAsync)', () async {
       final paths = [
         'test/assets/01 TempleOS Hymn Risen (Remix).mp3',
@@ -495,8 +555,11 @@ void main() {
       );
       expect(results.length, equals(3));
       expect(results[0].title, equals('TempleOS Hymn Risen (Remix)'));
+      expect(results[0].rating, equals(0));
       expect(results[1].title, equals('TempleOS Hymn Risen (Remix)'));
+      expect(results[1].rating, equals(0));
       expect(results[2].title, equals('TempleOS Hymn Risen (Remix)'));
+      expect(results[2].rating, equals(0));
     });
 
     test('Batch read with readCover enabled (readBatchAsync)', () async {

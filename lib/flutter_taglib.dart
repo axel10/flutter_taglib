@@ -76,6 +76,7 @@ class BatchTagMetadata {
     this.comment = '',
     required this.year,
     required this.track,
+    this.rating = 0,
     required this.duration,
     required this.bitrate,
     required this.sampleRate,
@@ -96,6 +97,7 @@ class BatchTagMetadata {
   final String comment;
   final int year;
   final int track;
+  final int rating;
   final Duration duration;
   final int bitrate;
   final int sampleRate;
@@ -835,6 +837,7 @@ class TagLibFile {
       comment: (item['comment'] as String?) ?? '',
       year: (item['year'] as int?) ?? 0,
       track: (item['track'] as int?) ?? 0,
+      rating: (item['rating'] as int?) ?? 0,
       duration: Duration(milliseconds: (item['durationMs'] as int?) ?? 0),
       bitrate: (item['bitrate'] as int?) ?? 0,
       sampleRate: (item['sampleRate'] as int?) ?? 0,
@@ -1063,6 +1066,12 @@ class TagLibFile {
   set track(int value) {
     _checkClosed();
     bindings.taglib_bridge_set_track(_handle, value);
+  }
+
+  /// The rating of the audio file, normalized to 1-5 stars (0 = unrated).
+  int get rating {
+    _checkClosed();
+    return bindings.taglib_bridge_get_rating(_handle);
   }
 
   // --- Audio Properties ---
@@ -1668,6 +1677,9 @@ abstract final class TagProperties {
   /// The genre (GENRE).
   static const String genre = 'GENRE';
 
+  /// The song rating, typically 1 to 5 (RATING).
+  static const String rating = 'RATING';
+
   /// Comments or notes (COMMENT).
   static const String comment = 'COMMENT';
 
@@ -1785,6 +1797,7 @@ Map<String, dynamic> _readSingleFileMetadataMap(
 
       final year = bindings.taglib_bridge_get_year(handle);
       final track = bindings.taglib_bridge_get_track(handle);
+      final rating = bindings.taglib_bridge_get_rating(handle);
       final durationMs = bindings.taglib_bridge_get_duration(handle);
       final bitrate = bindings.taglib_bridge_get_bitrate(handle);
       final sampleRate = bindings.taglib_bridge_get_samplerate(handle);
@@ -1826,6 +1839,7 @@ Map<String, dynamic> _readSingleFileMetadataMap(
         'comment': comment,
         'year': year,
         'track': track,
+        'rating': rating,
         'durationMs': durationMs,
         'bitrate': bitrate,
         'sampleRate': sampleRate,

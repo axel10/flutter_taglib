@@ -50,6 +50,7 @@ FFI_PLUGIN_EXPORT const char* taglib_bridge_get_comment(TagLibBridgeFile* file);
 // Read integer properties
 FFI_PLUGIN_EXPORT uint32_t taglib_bridge_get_year(TagLibBridgeFile* file);
 FFI_PLUGIN_EXPORT uint32_t taglib_bridge_get_track(TagLibBridgeFile* file);
+FFI_PLUGIN_EXPORT uint32_t taglib_bridge_get_rating(TagLibBridgeFile* file);
 
 // Write string properties
 FFI_PLUGIN_EXPORT void taglib_bridge_set_title(TagLibBridgeFile* file, const char* title);
