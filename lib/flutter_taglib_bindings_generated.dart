@@ -54,6 +54,11 @@ external ffi.Pointer<TagLibBridgeFile> taglib_bridge_open_http(
   int timeout_ms,
 );
 
+/// Whether any HTTP range read failed or came back short while parsing.
+/// Returns 1 if so, 0 otherwise.
+@ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
+external int taglib_bridge_had_read_error(ffi.Pointer<TagLibBridgeFile> file);
+
 /// Save changes to the file. Returns 1 on success, 0 on failure.
 @ffi.Native<ffi.Int Function(ffi.Pointer<TagLibBridgeFile>)>()
 external int taglib_bridge_save(ffi.Pointer<TagLibBridgeFile> file);

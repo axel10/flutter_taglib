@@ -34,6 +34,12 @@ FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_fd_with_style(int fd, int
 // timeout_ms: connection and read timeout in milliseconds (e.g. 15000). 0 for default.
 FFI_PLUGIN_EXPORT TagLibBridgeFile* taglib_bridge_open_http(const char* url, const char* headers_json, int read_style, int timeout_ms);
 
+// Whether any HTTP range read failed or came back short while parsing.
+// Returns 1 if so, 0 when everything was read completely (or the file was opened from disk).
+// TagLib silently drops a whole tag block it cannot read in full, so an empty tag +
+// this flag means "retry", not "this file has no tags".
+FFI_PLUGIN_EXPORT int taglib_bridge_had_read_error(TagLibBridgeFile* file);
+
 // Save changes to the file. Returns 1 on success, 0 on failure.
 FFI_PLUGIN_EXPORT int taglib_bridge_save(TagLibBridgeFile* file);
 

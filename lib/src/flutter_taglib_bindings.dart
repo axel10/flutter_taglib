@@ -53,6 +53,10 @@ int taglib_bridge_save(ffi.Pointer<TagLibBridgeFile> file) {
   return generated.taglib_bridge_save(file);
 }
 
+int taglib_bridge_had_read_error(ffi.Pointer<TagLibBridgeFile> file) {
+  return generated.taglib_bridge_had_read_error(file);
+}
+
 void taglib_bridge_close(ffi.Pointer<TagLibBridgeFile> file) {
   generated.taglib_bridge_close(file);
 }

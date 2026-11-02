@@ -87,6 +87,7 @@ class BatchTagMetadata {
     this.coverData,
     required this.success,
     this.error,
+    this.readError = false,
   });
 
   final String path;
@@ -108,6 +109,13 @@ class BatchTagMetadata {
   final Uint8List? coverData;
   final bool success;
   final String? error;
+
+  /// `true` 表示解析期间有过 HTTP range 读取失败或短读。
+  ///
+  /// 这种情况下 TagLib 会**静默**丢弃读不全的标签块：`success` 仍是 true，
+  /// 时长/码率可能都有，但标题、艺术家、专辑、封面会集体变空。调用方据此
+  /// 区分「这文件本来没标签」和「这次没读到」，后者应当重试而不是落库缓存。
+  final bool readError;
 }
 
 class TagLibFile {
@@ -848,6 +856,7 @@ class TagLibFile {
       coverData: item['coverData'] as Uint8List?,
       success: item['success'] == true,
       error: item['error'] as String?,
+      readError: item['readError'] == true,
     );
   }
 
@@ -1175,6 +1184,35 @@ class TagLibFile {
   bool get hasCover {
     _checkClosed();
     return bindings.taglib_bridge_has_cover(_handle) == 1;
+  }
+
+  /// 读取过程中是否出现过失败/短读（本地文件恒为 false）。
+  ///
+  /// 配合空标签使用：`readError == true` 意味着「这次没读到」，不是「没有标签」。
+  bool get hadReadError {
+    _checkClosed();
+    return TagLibFile._readErrorFor(_handle);
+  }
+
+  /// 导出符号 `taglib_bridge_had_read_error` 是否存在。
+  ///
+  /// Dart 层可能先于原生二进制升级（预构建产物是按 release tag 下载的），
+  /// 老二进制缺这个符号时 lookup 会抛 ArgumentError。探一次就够，之后一律
+  /// 当作「没有读取失败」，行为退回引入该标记之前。
+  static bool _readErrorExportAvailable = true;
+
+  static bool _readErrorFor(ffi.Pointer<bindings.TagLibBridgeFile> handle) {
+    if (!_readErrorExportAvailable) return false;
+    try {
+      return bindings.taglib_bridge_had_read_error(handle) == 1;
+    } on ArgumentError {
+      _readErrorExportAvailable = false;
+      _logger.warning(
+        'taglib_bridge_had_read_error not exported by the loaded binary; '
+        'read-failure detection disabled.',
+      );
+      return false;
+    }
   }
 
   /// Returns all embedded pictures in the file.
@@ -1828,6 +1866,10 @@ Map<String, dynamic> _readSingleFileMetadataMap(
         }
       }
 
+      // 读取过程中有没有失败/短读。必须放在封面读之后：封面的 range 读取
+      // 也可能失败，而 TagLib 对失败同样是一声不吭地返回空。
+      final readError = TagLibFile._readErrorFor(handle);
+
       bindings.taglib_bridge_close(handle);
 
       return {
@@ -1848,6 +1890,7 @@ Map<String, dynamic> _readSingleFileMetadataMap(
         'format': format,
         'hasCover': hasCover,
         'coverData': coverData,
+        'readError': readError,
         'success': true,
       };
     } else {

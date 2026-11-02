@@ -268,9 +268,14 @@ static int open_content_uri_fd(const char* uri_str, const char* mode_str) {
 #define LOGE(...) do { fprintf(stderr, "[FlutterTaglib ERROR] "); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } while(0)
 #endif
 
+class HttpRangeIOStream;
+
 struct TagLibBridgeFile {
     TagLib::IOStream* stream;
     TagLib::FileRef* fileRef;
+
+    /// 仅当 stream 是 HttpRangeIOStream 时非空，用来判断读取过程中有没有失败/短读。
+    HttpRangeIOStream* httpStream = nullptr;
 
     // String cache for FFI lifetime safety
     std::string cachedTitle;
@@ -1311,6 +1316,17 @@ public:
     static constexpr size_t kBlockSize = 65536; // 64 KB per block
     static constexpr size_t kMaxCachedBlocks = 24; // ~1.5 MB cache
 
+    // 连续读超过这个尺寸就合并成一次 HTTP Range 请求。
+    //
+    // 逐块 64KB 抓取对「标签体很大」的文件是灾难：内嵌几百 KB 封面的 mp3，ID3v2
+    // 标签常有 700KB+，TagLib 解析时一次 readBlock(tagSize) 就要跨十几个块，等于
+    // 十几次串行的独立 HTTP 请求，每次都可能超时或短读。而 TagLib 对 ID3v2 的
+    // 处理是「要么整块解析成功，要么整个帧表丢弃」，短读不会报错，只会让标题 /
+    // 艺术家 / 专辑 / 封面全部变空，只剩音频属性 —— 上游完全看不出失败。
+    static constexpr size_t kCoalesceMinBytes = 128 * 1024;
+    // 单次合并读的上限，避免 accurate 档全量扫描时一口气拉走整个文件。
+    static constexpr size_t kCoalesceMaxBytes = 8 * 1024 * 1024;
+
     HttpRangeIOStream(std::string url, std::map<std::string, std::string> headers, int timeout_ms)
         : m_url(std::move(url)), m_headers(std::move(headers)), m_timeout_ms(timeout_ms), m_pos(0), m_length(0), m_isOpen(false)
     {
@@ -1345,6 +1361,15 @@ public:
         size_t toRead = length;
         if (m_pos + static_cast<int64_t>(toRead) > m_length) {
             toRead = static_cast<size_t>(m_length - m_pos);
+        }
+
+        // 大块连续读（ID3v2/APE 标签体、内嵌封面、尾部的 ID3v1）合并成一次请求。
+        // 逐块循环留给小读：碎片读本来就不吃亏，还能命中块缓存。
+        if (toRead >= kCoalesceMinBytes) {
+            const size_t spanLen = std::min(toRead, kCoalesceMaxBytes);
+            TagLib::ByteVector span = fetch_span(m_pos, spanLen);
+            m_pos += static_cast<int64_t>(span.size());
+            return span;
         }
 
         TagLib::ByteVector result;
@@ -1420,6 +1445,14 @@ public:
 
     void truncate(TagLib::offset_t) override {}
 
+    /// 读取过程中是否出现过失败/短读。
+    ///
+    /// 单看返回值无法判断「文件本身没有标签」和「标签读了一半被截断」——
+    /// TagLib 两种情况的产出都是空标签，所以由流自己记一笔，bridge 再往上抛。
+    bool hadReadError() const {
+        return m_hadReadError;
+    }
+
 private:
     std::string m_url;
     std::map<std::string, std::string> m_headers;
@@ -1427,6 +1460,7 @@ private:
     int64_t m_pos;
     int64_t m_length;
     bool m_isOpen;
+    bool m_hadReadError = false;
 
     std::unordered_map<int64_t, std::vector<uint8_t>> m_cache;
     std::vector<int64_t> m_lruOrder;
@@ -1476,14 +1510,58 @@ private:
         std::vector<uint8_t> blockData;
         int64_t totalLen = -1;
         std::string err;
-        bool ok = fetch_http_range(m_url, m_headers, startOffset, reqLen, m_timeout_ms, totalLen, blockData, err);
+        bool ok = false;
+        // 失败重试一次：远程读的失败大多是瞬时的（连接被重置、hydration 抖动），
+        // 而这里一旦放弃就等于让 TagLib 拿到截断数据 —— 它会静默丢掉整个标签。
+        for (int attempt = 0; attempt < 2 && !ok; ++attempt) {
+            blockData.clear();
+            err.clear();
+            ok = fetch_http_range(m_url, m_headers, startOffset, reqLen, m_timeout_ms,
+                                  totalLen, blockData, err);
+        }
         if (!ok || blockData.empty()) {
+            m_hadReadError = true;
             LOGE("HttpRangeIOStream fetch block %lld failed: %s", (long long)blockIndex, err.c_str());
             return nullptr;
+        }
+        if (static_cast<int64_t>(blockData.size()) < reqLen) {
+            // reqLen 已按文件尾夹过，短了就是服务端少给了字节。
+            m_hadReadError = true;
+            LOGW("HttpRangeIOStream short block %lld: want %lld got %zu",
+                 (long long)blockIndex, (long long)reqLen, blockData.size());
         }
 
         put_block(blockIndex, std::move(blockData));
         return &m_cache[blockIndex];
+    }
+
+    /// 一次性抓取 [offset, offset+len)，用于 readBlock 的合并读路径。
+    ///
+    /// 与逐块路径的区别不止是省请求数：单次请求要么整段到手、要么明确失败，
+    /// 不会留下「前 3 块有、第 4 块没了」这种半截状态。
+    TagLib::ByteVector fetch_span(int64_t offset, size_t len) {
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            std::vector<uint8_t> data;
+            int64_t totalLen = -1;
+            std::string err;
+            bool ok = fetch_http_range(m_url, m_headers, offset, static_cast<int64_t>(len),
+                                       m_timeout_ms, totalLen, data, err);
+            if (ok && data.size() == len) {
+                return TagLib::ByteVector(reinterpret_cast<const char*>(data.data()),
+                                          static_cast<unsigned int>(data.size()));
+            }
+            if (ok && !data.empty() && data.size() < len) {
+                m_hadReadError = true;
+                LOGW("HttpRangeIOStream short span @%lld: want %zu got %zu",
+                     (long long)offset, len, data.size());
+                return TagLib::ByteVector(reinterpret_cast<const char*>(data.data()),
+                                          static_cast<unsigned int>(data.size()));
+            }
+            LOGE("HttpRangeIOStream fetch span @%lld len=%zu failed (attempt %d): %s",
+                 (long long)offset, len, attempt + 1, err.c_str());
+        }
+        m_hadReadError = true;
+        return TagLib::ByteVector();
     }
 };
 
@@ -1519,6 +1597,7 @@ TagLibBridgeFile* taglib_bridge_open_http(const char* url, const char* headers_j
         auto bridge = new TagLibBridgeFile();
         bridge->stream = stream;
         bridge->fileRef = fileRef;
+        bridge->httpStream = stream;
         return bridge;
     } catch (const std::exception& e) {
         LOGE("taglib_bridge_open_http: std::exception caught for %s: %s", url, e.what());
@@ -1527,6 +1606,13 @@ TagLibBridgeFile* taglib_bridge_open_http(const char* url, const char* headers_j
         LOGE("taglib_bridge_open_http: unknown exception caught for %s", url);
         return nullptr;
     }
+}
+
+int taglib_bridge_had_read_error(TagLibBridgeFile* file) {
+    if (!file || !file->httpStream) {
+        return 0;
+    }
+    return file->httpStream->hadReadError() ? 1 : 0;
 }
 
 int taglib_bridge_save(TagLibBridgeFile* file) {
