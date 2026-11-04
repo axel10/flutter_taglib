@@ -88,6 +88,7 @@ class BatchTagMetadata {
     required this.success,
     this.error,
     this.readError = false,
+    this.lyrics = '',
   });
 
   final String path;
@@ -116,6 +117,13 @@ class BatchTagMetadata {
   /// 时长/码率可能都有，但标题、艺术家、专辑、封面会集体变空。调用方据此
   /// 区分「这文件本来没标签」和「这次没读到」，后者应当重试而不是落库缓存。
   final bool readError;
+
+  /// 内嵌歌词（`LYRICS`，部分文件为 `UNSYNCEDLYRICS`）。
+  ///
+  /// 空串表示文件里没有歌词，**也可能是** [readError] 导致的没读到 ——
+  /// 调用方必须结合 [readError] 判断，不能把空串当成「确认没有」。
+  /// 远程文件走 HTTP Range 打开时同样适用，不需要先下载整首。
+  final String lyrics;
 }
 
 class TagLibFile {
@@ -857,6 +865,7 @@ class TagLibFile {
       success: item['success'] == true,
       error: item['error'] as String?,
       readError: item['readError'] == true,
+      lyrics: (item['lyrics'] as String?) ?? '',
     );
   }
 
@@ -1866,6 +1875,41 @@ Map<String, dynamic> _readSingleFileMetadataMap(
         }
       }
 
+      // 内嵌歌词：走通用属性表。ID3 的 USLT 在 TagLib 里映射为 LYRICS，
+      // 少数写法是 UNSYNCEDLYRICS，两个都看。远程 HTTP Range 打开时这里只触发
+      // 必要的分片读取，不会下载整首。
+      var lyrics = '';
+      final propsHandle = bindings.taglib_bridge_properties_get(handle);
+      if (propsHandle != ffi.nullptr) {
+        try {
+          final propCount = bindings.taglib_bridge_properties_size(propsHandle);
+          for (var i = 0; i < propCount; i++) {
+            final keyPtr = bindings.taglib_bridge_properties_key(
+              propsHandle,
+              i,
+            );
+            if (keyPtr == ffi.nullptr) continue;
+            final key = keyPtr.cast<Utf8>().toDartString().toUpperCase();
+            if (key != 'LYRICS' && key != 'UNSYNCEDLYRICS') continue;
+            final valueCount = bindings.taglib_bridge_properties_value_count(
+              propsHandle,
+              keyPtr,
+            );
+            if (valueCount <= 0) continue;
+            final valuePtr = bindings.taglib_bridge_properties_value(
+              propsHandle,
+              keyPtr,
+              0,
+            );
+            if (valuePtr == ffi.nullptr) continue;
+            lyrics = valuePtr.cast<Utf8>().toDartString();
+            if (lyrics.isNotEmpty) break;
+          }
+        } finally {
+          bindings.taglib_bridge_properties_free(propsHandle);
+        }
+      }
+
       // 读取过程中有没有失败/短读。必须放在封面读之后：封面的 range 读取
       // 也可能失败，而 TagLib 对失败同样是一声不吭地返回空。
       final readError = TagLibFile._readErrorFor(handle);
@@ -1891,6 +1935,7 @@ Map<String, dynamic> _readSingleFileMetadataMap(
         'hasCover': hasCover,
         'coverData': coverData,
         'readError': readError,
+        'lyrics': lyrics,
         'success': true,
       };
     } else {
