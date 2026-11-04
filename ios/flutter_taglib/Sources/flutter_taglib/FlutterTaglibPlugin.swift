@@ -63,21 +63,6 @@ public class FlutterTaglibPlugin: NSObject, FlutterPlugin, UIDocumentPickerDeleg
         self.pendingPickerAction = nil
       }
 
-    case "startAccessingDirectory":
-      guard let args = call.arguments as? [String: Any],
-            let path = args["path"] as? String else {
-        result(FlutterError(code: "INVALID_ARGUMENT", message: "Missing path argument", details: nil))
-        return
-      }
-
-      if let activePath = activeAuthorizedPath(for: path) {
-        result(["path": activePath])
-      } else if let restoredPath = restoreDirectoryAccess(for: path) {
-        result(["path": restoredPath])
-      } else {
-        result(FlutterError(code: "ACCESS_DENIED", message: "Directory has not been authorized", details: nil))
-      }
-
     case "restoreDirectoryAccess":
       guard let args = call.arguments as? [String: Any],
             let path = args["path"] as? String else {
@@ -142,6 +127,10 @@ public class FlutterTaglibPlugin: NSObject, FlutterPlugin, UIDocumentPickerDeleg
       } else if let commitError {
         result(FlutterError(code: "COMMIT_FAILED", message: commitError.localizedDescription, details: nil))
       } else {
+        // working copy 只在 commit 期间需要。不清理会在临时目录里堆下整份音频副本。
+        if workingURL.path != originalURL.path {
+          try? FileManager.default.removeItem(at: workingURL)
+        }
         result(nil)
       }
 
@@ -193,17 +182,6 @@ public class FlutterTaglibPlugin: NSObject, FlutterPlugin, UIDocumentPickerDeleg
       }
       activeUrls[url.path] = url
       persistBookmark(for: url)
-      do {
-        let bookmarkData = try url.bookmarkData(
-          options: [],
-          includingResourceValuesForKeys: nil,
-          relativeTo: nil
-        )
-        var audioBookmarks = UserDefaults.standard.dictionary(forKey: "audio_core.securityScopedBookmarks") as? [String: Data] ?? [:]
-        let standardKey = url.standardizedFileURL.resolvingSymlinksInPath().path
-        audioBookmarks[standardKey] = bookmarkData
-        UserDefaults.standard.set(audioBookmarks, forKey: "audio_core.securityScopedBookmarks")
-      } catch {}
       pendingResult?([
         "path": url.path
       ])
@@ -256,8 +234,10 @@ public class FlutterTaglibPlugin: NSObject, FlutterPlugin, UIDocumentPickerDeleg
 
   private func persistBookmark(for url: URL) {
     do {
+      // `.minimalBookmark` 是 iOS 上唯一能跨启动保留的创建选项；空选项集造出来的
+      // bookmark 解出来不带 scope，之后 startAccessing 必然失败。
       let bookmarkData = try url.bookmarkData(
-        options: [],
+        options: .minimalBookmark,
         includingResourceValuesForKeys: nil,
         relativeTo: nil
       )
