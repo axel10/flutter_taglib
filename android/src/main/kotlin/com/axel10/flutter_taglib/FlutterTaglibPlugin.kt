@@ -29,6 +29,9 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
     private var context: Context? = null
     private var activity: Activity? = null
     private var pendingResult: Result? = null
+    private var pendingBatchResult: Result? = null
+    private var pendingBatchResultsMap: MutableMap<String, String?>? = null
+    private var pendingBatchMediaStoreTargets: List<Pair<String, Uri>>? = null
     private var pendingPermissionResult: Result? = null
     private var pendingPickDirectoryResult: Result? = null
     private var resolvedUriString: String? = null
@@ -39,6 +42,7 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
         private const val REQUEST_WRITE_PERMISSION = 1045
         private const val REQUEST_STORAGE_PERMISSION = 1046
         private const val REQUEST_PICK_SAF_DIRECTORY = 1047
+        private const val REQUEST_BATCH_WRITE_PERMISSION = 1048
 
         @Volatile
         private var isNativeLibraryLoaded = false
@@ -193,6 +197,20 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
             Thread {
                 handleRequestWritePermission(uriStr, result)
             }.start()
+        } else if (call.method == "requestWritePermissions") {
+            val uris = call.argument<List<String>>("uris")
+            if (uris == null) {
+                result.error("INVALID_ARGUMENT", "URIs list is null", null)
+                return
+            }
+            if (uris.isEmpty()) {
+                result.success(emptyMap<String, String?>())
+                return
+            }
+            Log.d(TAG, "onMethodCall requestWritePermissions: count=${uris.size}")
+            Thread {
+                handleRequestWritePermissions(uris, result)
+            }.start()
         } else if (call.method == "openWritableFileDescriptor") {
             val uriStr = call.argument<String>("uri")
             if (uriStr == null) {
@@ -270,15 +288,19 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
         }
     }
 
-    private fun handleRequestWritePermission(uriStr: String, result: Result) {
-        val safeContext = context ?: run {
-            Log.e(TAG, "handleRequestWritePermission: context is null")
-            mainHandler.post {
-                result.error("INTERNAL_ERROR", "Context is null", null)
-            }
-            return
-        }
+    private sealed class WritePermissionResolution {
+        data class Ready(val resolvedUri: String?) : WritePermissionResolution()
+        data class NeedsMediaStoreWriteRequest(val targetUri: Uri) : WritePermissionResolution()
+        data class NeedsRecoverableIntent(
+            val targetUriStr: String,
+            val exception: android.app.RecoverableSecurityException
+        ) : WritePermissionResolution()
+    }
 
+    private fun resolveWritePermissionTarget(
+        safeContext: Context,
+        uriStr: String
+    ): WritePermissionResolution {
         var originalUri = Uri.parse(uriStr)
         if (!uriStr.startsWith("content://") && !uriStr.startsWith("http://") && !uriStr.startsWith("https://")) {
             val safUri = resolvePhysicalPathToSafUri(safeContext, uriStr)
@@ -286,24 +308,21 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
                 originalUri = safUri
             }
         }
-        Log.d(TAG, "handleRequestWritePermission: originalUri=$originalUri, authority=${originalUri.authority}")
-        
+        Log.d(TAG, "resolveWritePermissionTarget: originalUri=$originalUri, authority=${originalUri.authority}")
+
         val isContentUri = originalUri.toString().startsWith("content://")
-        
+
         if (!isContentUri) {
             val filePath = originalUri.toString()
             try {
                 val file = java.io.File(filePath)
                 val writable = file.exists() && file.canWrite()
-                Log.d(TAG, "handleRequestWritePermission: local file path=$filePath, writable=$writable")
+                Log.d(TAG, "resolveWritePermissionTarget: local file path=$filePath, writable=$writable")
                 if (writable) {
-                    mainHandler.post {
-                        result.success(filePath)
-                    }
-                    return
+                    return WritePermissionResolution.Ready(filePath)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "handleRequestWritePermission: failed checking local file: ${e.message}")
+                Log.e(TAG, "resolveWritePermissionTarget: failed checking local file: ${e.message}")
             }
         }
 
@@ -313,22 +332,19 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
         if (isContentUri) {
             try {
                 safeContext.contentResolver.openFileDescriptor(originalUri, "rw")?.use {
-                    Log.d(TAG, "handleRequestWritePermission: direct rw open succeeded for $originalUri")
-                    mainHandler.post {
-                        result.success(originalUri.toString())
-                    }
-                    return
+                    Log.d(TAG, "resolveWritePermissionTarget: direct rw open succeeded for $originalUri")
+                    return WritePermissionResolution.Ready(originalUri.toString())
                 }
             } catch (e: android.app.RecoverableSecurityException) {
                 Log.w(
                     TAG,
-                    "handleRequestWritePermission: direct rw open hit RecoverableSecurityException for $originalUri: ${e.message}",
+                    "resolveWritePermissionTarget: direct rw open hit RecoverableSecurityException for $originalUri: ${e.message}",
                 )
                 recoverableException = e
             } catch (e: SecurityException) {
-                Log.w(TAG, "handleRequestWritePermission: direct rw open denied for $originalUri: ${e.message}")
+                Log.w(TAG, "resolveWritePermissionTarget: direct rw open denied for $originalUri: ${e.message}")
             } catch (e: Exception) {
-                Log.w(TAG, "handleRequestWritePermission: direct rw open failed for $originalUri: ${e.message}")
+                Log.w(TAG, "resolveWritePermissionTarget: direct rw open failed for $originalUri: ${e.message}")
             }
 
             // SAF tree URIs are expected to be writable through the selected folder's
@@ -340,12 +356,9 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
             if (isTreeUri) {
                 Log.w(
                     TAG,
-                    "handleRequestWritePermission: refusing per-file write request for SAF tree uri=$originalUri",
+                    "resolveWritePermissionTarget: refusing per-file write request for SAF tree uri=$originalUri",
                 )
-                mainHandler.post {
-                    result.success(null)
-                }
-                return
+                return WritePermissionResolution.Ready(null)
             }
         }
 
@@ -357,107 +370,193 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
         }
 
         if (targetUri == null) {
-            Log.w(TAG, "handleRequestWritePermission: targetUri could not be resolved, returning null")
-            mainHandler.post {
-                result.success(null)
-            }
-            return
+            Log.w(TAG, "resolveWritePermissionTarget: targetUri could not be resolved, returning null")
+            return WritePermissionResolution.Ready(null)
         }
 
         val targetUriStr = targetUri.toString()
-        Log.d(TAG, "handleRequestWritePermission: resolved targetUri=$targetUriStr")
+        Log.d(TAG, "resolveWritePermissionTarget: resolved targetUri=$targetUriStr")
 
         // First check if we already have permission for targetUri (on background thread!)
         if (checkUriPermission(targetUri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) {
-            Log.d(TAG, "handleRequestWritePermission: Already has write permission via checkUriPermission for $targetUriStr")
-            mainHandler.post {
-                result.success(targetUriStr)
-            }
-            return
+            Log.d(TAG, "resolveWritePermissionTarget: Already has write permission via checkUriPermission for $targetUriStr")
+            return WritePermissionResolution.Ready(targetUriStr)
         }
 
         // Try opening the resolved targetUri in rw mode on background thread if it's different
         if (targetUri != originalUri) {
             try {
                 safeContext.contentResolver.openFileDescriptor(targetUri, "rw")?.use {
-                    Log.d(TAG, "handleRequestWritePermission: Successfully opened resolved targetUri in 'rw' mode, returning $targetUriStr")
-                    mainHandler.post {
-                        result.success(targetUriStr)
-                    }
-                    return
+                    Log.d(TAG, "resolveWritePermissionTarget: Successfully opened resolved targetUri in 'rw' mode, returning $targetUriStr")
+                    return WritePermissionResolution.Ready(targetUriStr)
                 }
             } catch (e: android.app.RecoverableSecurityException) {
-                Log.d(TAG, "handleRequestWritePermission: RecoverableSecurityException caught for targetUri: ${e.message}")
+                Log.d(TAG, "resolveWritePermissionTarget: RecoverableSecurityException caught for targetUri: ${e.message}")
                 recoverableException = e
             } catch (e: SecurityException) {
-                Log.w(TAG, "handleRequestWritePermission: SecurityException during 'rw' open check for targetUri: ${e.message}")
+                Log.w(TAG, "resolveWritePermissionTarget: SecurityException during 'rw' open check for targetUri: ${e.message}")
             } catch (e: Exception) {
-                Log.w(TAG, "handleRequestWritePermission: Exception during 'rw' open check for targetUri: ${e.message}")
+                Log.w(TAG, "resolveWritePermissionTarget: Exception during 'rw' open check for targetUri: ${e.message}")
             }
         }
 
-        // Switch to the main thread ONLY for launching user action intents
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && targetUri.authority == "media") {
+            return WritePermissionResolution.NeedsMediaStoreWriteRequest(targetUri)
+        }
+
         val currentRecoverableException = recoverableException
         if (currentRecoverableException != null) {
+            return WritePermissionResolution.NeedsRecoverableIntent(
+                targetUriStr = targetUriStr,
+                exception = currentRecoverableException
+            )
+        }
+
+        Log.w(TAG, "resolveWritePermissionTarget: No permission available, returning null")
+        return WritePermissionResolution.Ready(null)
+    }
+
+    private fun handleRequestWritePermission(uriStr: String, result: Result) {
+        val safeContext = context ?: run {
+            Log.e(TAG, "handleRequestWritePermission: context is null")
             mainHandler.post {
-                val safeActivity = activity ?: run {
-                    Log.e(TAG, "handleRequestWritePermission: activity is null for RecoverableSecurityException")
-                    result.error("NO_ACTIVITY", "Activity is null, cannot request write permission", null)
-                    return@post
-                }
-                pendingResult = result
-                resolvedUriString = targetUriStr
-                try {
-                    safeActivity.startIntentSenderForResult(
-                        currentRecoverableException.userAction.actionIntent.intentSender,
-                        REQUEST_WRITE_PERMISSION,
-                        null,
-                        0,
-                        0,
-                        0
-                    )
-                } catch (launchError: Exception) {
-                    pendingResult = null
-                    resolvedUriString = null
-                    Log.e(TAG, "handleRequestWritePermission: failed launching RecoverableSecurityException intent: ${launchError.message}")
-                    result.error("WRITE_PERMISSION_FAILED", launchError.message, null)
-                }
+                result.error("INTERNAL_ERROR", "Context is null", null)
             }
             return
         }
 
-        // Android 11+ (API 30+) MediaStore.createWriteRequest (only for MediaStore URIs)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && targetUri.authority == "media") {
-            Log.d(TAG, "handleRequestWritePermission: API 30+, using MediaStore.createWriteRequest")
-            mainHandler.post {
-                val safeActivity = activity ?: run {
-                    Log.e(TAG, "handleRequestWritePermission: activity is null for MediaStore.createWriteRequest")
-                    result.error("NO_ACTIVITY", "Activity is null, cannot request write permission", null)
-                    return@post
-                }
-                try {
-                    val uris = listOf(targetUri)
-                    val pendingIntent = MediaStore.createWriteRequest(safeContext.contentResolver, uris)
-                    pendingResult = result
-                    resolvedUriString = targetUriStr
-                    safeActivity.startIntentSenderForResult(
-                        pendingIntent.intentSender,
-                        REQUEST_WRITE_PERMISSION,
-                        null,
-                        0,
-                        0,
-                        0
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "handleRequestWritePermission: MediaStore.createWriteRequest failed: ${e.message}")
-                    result.error("WRITE_PERMISSION_FAILED", e.message, null)
+        when (val resolution = resolveWritePermissionTarget(safeContext, uriStr)) {
+            is WritePermissionResolution.Ready -> {
+                mainHandler.post {
+                    result.success(resolution.resolvedUri)
                 }
             }
-        } else {
-            // Not a MediaStore URI or SDK < 30, and both checks failed. Return null.
-            Log.w(TAG, "handleRequestWritePermission: No permission available, returning null")
+            is WritePermissionResolution.NeedsRecoverableIntent -> {
+                mainHandler.post {
+                    val safeActivity = activity ?: run {
+                        Log.e(TAG, "handleRequestWritePermission: activity is null for RecoverableSecurityException")
+                        result.error("NO_ACTIVITY", "Activity is null, cannot request write permission", null)
+                        return@post
+                    }
+                    pendingResult = result
+                    resolvedUriString = resolution.targetUriStr
+                    try {
+                        safeActivity.startIntentSenderForResult(
+                            resolution.exception.userAction.actionIntent.intentSender,
+                            REQUEST_WRITE_PERMISSION,
+                            null,
+                            0,
+                            0,
+                            0
+                        )
+                    } catch (launchError: Exception) {
+                        pendingResult = null
+                        resolvedUriString = null
+                        Log.e(TAG, "handleRequestWritePermission: failed launching RecoverableSecurityException intent: ${launchError.message}")
+                        result.error("WRITE_PERMISSION_FAILED", launchError.message, null)
+                    }
+                }
+            }
+            is WritePermissionResolution.NeedsMediaStoreWriteRequest -> {
+                Log.d(TAG, "handleRequestWritePermission: API 30+, using MediaStore.createWriteRequest")
+                mainHandler.post {
+                    val safeActivity = activity ?: run {
+                        Log.e(TAG, "handleRequestWritePermission: activity is null for MediaStore.createWriteRequest")
+                        result.error("NO_ACTIVITY", "Activity is null, cannot request write permission", null)
+                        return@post
+                    }
+                    try {
+                        val uris = listOf(resolution.targetUri)
+                        val pendingIntent = MediaStore.createWriteRequest(safeContext.contentResolver, uris)
+                        pendingResult = result
+                        resolvedUriString = resolution.targetUri.toString()
+                        safeActivity.startIntentSenderForResult(
+                            pendingIntent.intentSender,
+                            REQUEST_WRITE_PERMISSION,
+                            null,
+                            0,
+                            0,
+                            0
+                        )
+                    } catch (e: Exception) {
+                        Log.e(TAG, "handleRequestWritePermission: MediaStore.createWriteRequest failed: ${e.message}")
+                        result.error("WRITE_PERMISSION_FAILED", e.message, null)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun handleRequestWritePermissions(uriStrs: List<String>, result: Result) {
+        val safeContext = context ?: run {
+            Log.e(TAG, "handleRequestWritePermissions: context is null")
             mainHandler.post {
-                result.success(null)
+                result.error("INTERNAL_ERROR", "Context is null", null)
+            }
+            return
+        }
+
+        val resultsMap = mutableMapOf<String, String?>()
+        val mediaStoreTargets = mutableListOf<Pair<String, Uri>>()
+
+        for (uriStr in uriStrs.distinct()) {
+            when (val resolution = resolveWritePermissionTarget(safeContext, uriStr)) {
+                is WritePermissionResolution.Ready -> {
+                    resultsMap[uriStr] = resolution.resolvedUri
+                }
+                is WritePermissionResolution.NeedsMediaStoreWriteRequest -> {
+                    mediaStoreTargets.add(uriStr to resolution.targetUri)
+                }
+                is WritePermissionResolution.NeedsRecoverableIntent -> {
+                    // API 29 RecoverableSecurityException only supports single-file prompts;
+                    // leave as null so single-file fallback handles it if needed.
+                    resultsMap[uriStr] = null
+                }
+            }
+        }
+
+        if (mediaStoreTargets.isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            mainHandler.post {
+                result.success(resultsMap)
+            }
+            return
+        }
+
+        val urisToRequest = mediaStoreTargets.map { it.second }.distinct()
+        Log.d(
+            TAG,
+            "handleRequestWritePermissions: API 30+, requesting batch write access for ${urisToRequest.size} URIs"
+        )
+        mainHandler.post {
+            val safeActivity = activity ?: run {
+                Log.e(TAG, "handleRequestWritePermissions: activity is null for MediaStore.createWriteRequest")
+                result.error("NO_ACTIVITY", "Activity is null, cannot request batch write permission", null)
+                return@post
+            }
+            if (pendingBatchResult != null) {
+                Log.w(TAG, "handleRequestWritePermissions: another batch permission request is already pending")
+                result.error("REQUEST_IN_PROGRESS", "A batch write permission request is already in progress", null)
+                return@post
+            }
+            try {
+                val pendingIntent = MediaStore.createWriteRequest(safeContext.contentResolver, urisToRequest)
+                pendingBatchResult = result
+                pendingBatchResultsMap = resultsMap
+                pendingBatchMediaStoreTargets = mediaStoreTargets
+                safeActivity.startIntentSenderForResult(
+                    pendingIntent.intentSender,
+                    REQUEST_BATCH_WRITE_PERMISSION,
+                    null,
+                    0,
+                    0,
+                    0
+                )
+            } catch (e: Exception) {
+                pendingBatchResult = null
+                pendingBatchResultsMap = null
+                pendingBatchMediaStoreTargets = null
+                Log.e(TAG, "handleRequestWritePermissions: MediaStore.createWriteRequest failed: ${e.message}")
+                result.error("WRITE_PERMISSION_FAILED", e.message, null)
             }
         }
     }
@@ -674,6 +773,22 @@ class FlutterTaglibPlugin: FlutterPlugin, MethodCallHandler, ActivityAware, Plug
                     Log.w(TAG, "onActivityResult: Permission DENIED, returning null")
                     result.success(null)
                 }
+                return true
+            }
+        } else if (requestCode == REQUEST_BATCH_WRITE_PERMISSION) {
+            val result = pendingBatchResult
+            val resultsMap = pendingBatchResultsMap
+            val targets = pendingBatchMediaStoreTargets
+            pendingBatchResult = null
+            pendingBatchResultsMap = null
+            pendingBatchMediaStoreTargets = null
+            Log.d(TAG, "onActivityResult: batch requestCode=$requestCode, resultCode=$resultCode (Activity.RESULT_OK=${Activity.RESULT_OK})")
+            if (result != null && resultsMap != null) {
+                val granted = resultCode == Activity.RESULT_OK
+                targets?.forEach { (origUriStr, targetUri) ->
+                    resultsMap[origUriStr] = if (granted) targetUri.toString() else null
+                }
+                result.success(resultsMap)
                 return true
             }
         } else if (requestCode == REQUEST_PICK_SAF_DIRECTORY) {

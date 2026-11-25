@@ -272,6 +272,46 @@ class TagLibFile {
     }
   }
 
+  /// Requests write permissions for multiple file paths or URIs in a single
+  /// batch on Android (using `MediaStore.createWriteRequest` for all
+  /// non-authorized MediaStore items at once).
+  ///
+  /// Returns a map from each input URI/path to the granted writable path/URI,
+  /// or `null` if permission was denied or unavailable.
+  /// On non-Android platforms, returns each input mapped to itself.
+  static Future<Map<String, String?>> requestWritePermissions(
+    List<String> uris,
+  ) async {
+    if (uris.isEmpty) return const <String, String?>{};
+    if (!Platform.isAndroid) {
+      return <String, String?>{for (final uri in uris) uri: uri};
+    }
+    if (!isSupported) {
+      lastError =
+          'flutter_taglib is not supported or has been disabled on this platform.';
+      throw UnsupportedError(
+        'flutter_taglib is not supported or has been disabled on this platform.',
+      );
+    }
+    try {
+      final raw = await _channel.invokeMethod<Map<Object?, Object?>>(
+        'requestWritePermissions',
+        <String, Object?>{'uris': uris},
+      );
+      if (raw == null) {
+        return <String, String?>{for (final uri in uris) uri: null};
+      }
+      return <String, String?>{
+        for (final uri in uris) uri: raw[uri] as String?,
+      };
+    } catch (e) {
+      _logger.warning('requestWritePermissions failed: $e');
+      lastError = 'requestWritePermissions failed: $e';
+      debugPrint('[flutter_taglib] $lastError');
+      return const <String, String?>{};
+    }
+  }
+
   static bool _androidContextInitialized = false;
 
   /// Ensures native JNI context (JavaVM and Application Context) is initialized on Android.
