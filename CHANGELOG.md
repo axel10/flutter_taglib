@@ -1,3 +1,12 @@
+## 1.7.0
+* Added audio bit depth extraction (`bitDepth` on `TagLibFile`, `AudioInfo`, and `BatchTagMetadata`) for lossless formats including FLAC, WAV, AIFF, APE, WavPack, ALAC, TrueAudio, DSF, and DSDIFF.
+* Added normalized song rating support (`rating` on `TagLibFile` and `BatchTagMetadata`, plus `TagProperties.rating`).
+* Added embedded lyrics extraction (`lyrics` on `BatchTagMetadata`, reading `LYRICS` / `UNSYNCEDLYRICS`), supporting remote HTTP Range streams without full file downloads.
+* Added HTTP stream read-error tracking (`hadReadError` on `TagLibFile` and `readError` on `BatchTagMetadata`) to distinguish empty tags from truncated/failed reads.
+* Improved HTTP Range streaming performance by coalescing large reads (>=128KB) into single range requests with a 1-time retry on transient failures.
+* Fixed iOS Security-Scoped bookmark persistence using `.minimalBookmark` and cleaned up temporary working copies after `commitTagChanges` succeeds.
+* Updated prebuilt native binary versions.
+
 ## 1.6.0
 * Added remote HTTP/HTTPS stream tag reading support with `TagLib.openUrl` and `TagLib.openUrlAsync`.
 * Implemented cross-platform native HTTP streaming with HTTP Range support (Apple URLSession, Android HttpURLConnection, Windows WinHttp, Linux libcurl) to read tags without full file downloads.
